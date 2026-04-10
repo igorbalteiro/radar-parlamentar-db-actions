@@ -30,26 +30,35 @@ def get_deputados():
 def get_gastos(deputado_id):
     """
     Soma todos os gastos do deputado nos últimos 30 dias.
-    Pagina automaticamente até não haver mais dados.
+    A API de despesas filtra por ano e mês, não por data exata.
     """
     total = 0.0
-    pagina = 1
-    while True:
-        r = requests.get(
-            f"{BASE_URL}/deputados/{deputado_id}/despesas",
-            params={
-                "dataInicio": DATA_INICIO,
-                "dataFim": DATA_FIM,
-                "itens": 100,
-                "pagina": pagina,
-            },
-        )
-        r.raise_for_status()
-        dados = r.json().get("dados", [])
-        if not dados:
-            break
-        total += sum(d.get("valorLiquido", 0) for d in dados)
-        pagina += 1
+
+    # Gera os meses que cobrem a janela de 30 dias
+    meses = set()
+    for i in range(31):
+        dia = hoje - timedelta(days=i)
+        meses.add((dia.year, dia.month))
+
+    for ano, mes in meses:
+        pagina = 1
+        while True:
+            r = requests.get(
+                f"{BASE_URL}/deputados/{deputado_id}/despesas",
+                params={
+                    "ano": ano,
+                    "mes": mes,
+                    "itens": 100,
+                    "pagina": pagina,
+                },
+            )
+            r.raise_for_status()
+            dados = r.json().get("dados", [])
+            if not dados:
+                break
+            total += sum(d.get("valorLiquido", 0) for d in dados)
+            pagina += 1
+
     return total
 
 
