@@ -22,7 +22,7 @@ DATA_INICIO = (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
 
 def get_deputados():
     """Retorna lista com todos os 513 deputados ativos."""
-    r = requests.get(f"{BASE_URL}/deputados", params={"itens": 513})
+    r = requests.get(f"{BASE_URL}/deputados", params={"itens": 600})
     r.raise_for_status()
     return r.json()["dados"]
 
@@ -99,7 +99,6 @@ def processar_deputado(dep):
         "nome": nome,
         "partido": dep.get("siglaPartido"),
         "uf": dep.get("siglaUf"),
-        "foto_url": dep.get("urlFoto"),
         "atualizado_em": hoje.isoformat(),
     }).execute()
 
