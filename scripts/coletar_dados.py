@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 3  # paralelas simultâneas — respeita o rate limit da API
+MAX_WORKERS = 5  # paralelas simultâneas — respeita o rate limit da API
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
