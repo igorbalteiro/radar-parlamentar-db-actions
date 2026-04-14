@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 5  # paralelas simultâneas — respeita o rate limit da API
+MAX_WORKERS = 3  # paralelas simultâneas — respeita o rate limit da API
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -63,32 +63,50 @@ def get_gastos(deputado_id):
 
 
 def get_discursos(deputado_id):
-    """Conta quantos discursos o deputado fez nos últimos 30 dias."""
-    r = requests.get(
-        f"{BASE_URL}/deputados/{deputado_id}/discursos",
-        params={
-            "dataInicio": DATA_INICIO,
-            "dataFim": DATA_FIM,
-            "itens": 100,
-        },
-    )
-    r.raise_for_status()
-    return len(r.json().get("dados", []))
+    """Conta quantos discursos o deputado fez nos últimos 30 dias, com paginação."""
+    total = 0
+    pagina = 1
+    while True:
+        r = requests.get(
+            f"{BASE_URL}/deputados/{deputado_id}/discursos",
+            params={
+                "dataInicio": DATA_INICIO,
+                "dataFim": DATA_FIM,
+                "itens": 100,
+                "pagina": pagina,
+            },
+        )
+        r.raise_for_status()
+        dados = r.json().get("dados", [])
+        if not dados:
+            break
+        total += len(dados)
+        pagina += 1
+    return total
 
 
 def get_proposicoes(deputado_id):
-    """Conta proposições apresentadas pelo deputado nos últimos 30 dias."""
-    r = requests.get(
-        f"{BASE_URL}/proposicoes",
-        params={
-            "idDeputadoAutor": deputado_id,
-            "dataApresentacaoInicio": DATA_INICIO,
-            "dataApresentacaoFim": DATA_FIM,
-            "itens": 100,
-        },
-    )
-    r.raise_for_status()
-    return len(r.json().get("dados", []))
+    """Conta proposições apresentadas pelo deputado nos últimos 30 dias, com paginação."""
+    total = 0
+    pagina = 1
+    while True:
+        r = requests.get(
+            f"{BASE_URL}/proposicoes",
+            params={
+                "idDeputadoAutor": deputado_id,
+                "dataApresentacaoInicio": DATA_INICIO,
+                "dataApresentacaoFim": DATA_FIM,
+                "itens": 100,
+                "pagina": pagina,
+            },
+        )
+        r.raise_for_status()
+        dados = r.json().get("dados", [])
+        if not dados:
+            break
+        total += len(dados)
+        pagina += 1
+    return total
 
 
 # ─── Tarefa por deputado ────────────────────────────────────────────────────
