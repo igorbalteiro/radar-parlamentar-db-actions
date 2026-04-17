@@ -44,8 +44,8 @@ def buscar_pagina(offset):
         "offset": offset,
         "direcaoOrdenacao": "asc",
         "colunaOrdenacao": "autor",
-        "de": ANO_ATUAL,
-        "ate": ANO_ATUAL,
+        "de": 2014,
+        "ate": 2025,
         "colunasSelecionadas": COLUNAS,
     }
     r = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=30)
@@ -77,7 +77,7 @@ def mapear_emenda(item):
 
 
 def main():
-    print(f"Iniciando coleta de emendas parlamentares — {ANO_ATUAL}")
+    print(f"Iniciando coleta de emendas parlamentares — 2014 - 2025")
 
     # Primeira requisição para descobrir o total de registros
     dados, total = buscar_pagina(offset=0)
