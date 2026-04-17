@@ -2,13 +2,23 @@ name: Coletar Dados Câmara
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Todo dia às 06:00 UTC (03:00 BRT)
-  workflow_dispatch:       # Permite rodar manualmente também
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      script_selecionado:
+        description: 'Qual script deseja rodar?'
+        required: true
+        default: 'todos'
+        type: choice
+        options:
+          - todos
+          - dados_gerais
+          - emendas_apenas
 
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    timeout-minutes: 60    # A API da Câmara pode ser lenta
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -20,12 +30,23 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Executar coleta
+      - name: Executar coleta (Dados Gerais)
+        # Só roda se for agendado pelo cron OU se selecionado manualmente
+        if: |
+          github.event_name == 'schedule' || 
+          github.event.inputs.script_selecionado == 'todos' || 
+          github.event.inputs.script_selecionado == 'dados_gerais'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_dados.py
+
       - name: Coletar emendas parlamentares
+        # Só roda se for agendado pelo cron OU se selecionado manualmente
+        if: |
+          github.event_name == 'schedule' || 
+          github.event.inputs.script_selecionado == 'todos' || 
+          github.event.inputs.script_selecionado == 'emendas_apenas'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
