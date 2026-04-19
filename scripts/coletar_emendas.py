@@ -109,7 +109,7 @@ def main():
         lote = emendas[i:i + LOTE]
         supabase.table("emendas_parlamentares").upsert(
             lote,
-            on_conflict="codigo_emenda,ano"
+            on_conflict="codigo_emenda,ano,tipo_emenda,valor_empenhado"
         ).execute()
         total_inseridos += len(lote)
         print(f"  {total_inseridos}/{len(emendas)} registros salvos...")
