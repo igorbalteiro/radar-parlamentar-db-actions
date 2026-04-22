@@ -6,7 +6,7 @@ from supabase import create_client
 import re
 import unicodedata
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
+SSUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -89,6 +89,7 @@ def mapear_emenda(item, deputados_index):
 
     return {
         "codigo_emenda": item.get("codigoEmenda"),
+        "link_detalhamento": item.get("linkDetalhamento"),
         "ano": item.get("ano"),
         "tipo_emenda": item.get("tipoEmenda"),
         "autor": item.get("autor"),
