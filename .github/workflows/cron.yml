@@ -2,7 +2,8 @@ name: Coletar Dados Câmara
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *'      # Diariamente às 06h UTC (metricas + emendas)
+    - cron: '0 8 * * 6'      # Sábados às 08h UTC (deputados + presenças)
   workflow_dispatch:
     inputs:
       script_selecionado:
@@ -12,13 +13,24 @@ on:
         type: choice
         options:
           - todos
-          - dados_gerais
-          - emendas_apenas
+          - deputados
+          - metricas
+          - emendas
+          - presencas
 
 jobs:
-  coletar:
+  coletar_diario:
+    name: Coleta diária (metricas + emendas)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Roda se: for o cron das 06h OU execução manual de metricas/emendas/todos
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (
+        github.event.inputs.script_selecionado == 'todos' ||
+        github.event.inputs.script_selecionado == 'metricas' ||
+        github.event.inputs.script_selecionado == 'emendas'
+      ))
 
     steps:
       - uses: actions/checkout@v4
@@ -30,24 +42,65 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Executar coleta (Dados Gerais)
-        # Só roda se for agendado pelo cron OU se selecionado manualmente
+      - name: Executar coleta (Metricas)
         if: |
-          github.event_name == 'schedule' || 
-          github.event.inputs.script_selecionado == 'todos' || 
-          github.event.inputs.script_selecionado == 'dados_gerais'
+          github.event_name == 'schedule' ||
+          github.event.inputs.script_selecionado == 'todos' ||
+          github.event.inputs.script_selecionado == 'metricas'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/coletar_dados.py
+        run: python scripts/coletar_metricas.py
 
-      - name: Coletar emendas parlamentares
-        # Só roda se for agendado pelo cron OU se selecionado manualmente
+      - name: Executar coleta (Emendas)
         if: |
-          github.event_name == 'schedule' || 
-          github.event.inputs.script_selecionado == 'todos' || 
-          github.event.inputs.script_selecionado == 'emendas_apenas'
+          github.event_name == 'schedule' ||
+          github.event.inputs.script_selecionado == 'todos' ||
+          github.event.inputs.script_selecionado == 'emendas'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_emendas.py
+
+  coletar_semanal:
+    name: Coleta semanal (deputados + presenças)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Roda se: for o cron dos sábados OU execução manual de deputados/presencas/todos
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 6') ||
+      (github.event_name == 'workflow_dispatch' && (
+        github.event.inputs.script_selecionado == 'todos' ||
+        github.event.inputs.script_selecionado == 'deputados' ||
+        github.event.inputs.script_selecionado == 'presencas'
+      ))
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar coleta (Deputados)
+        if: |
+          github.event_name == 'schedule' ||
+          github.event.inputs.script_selecionado == 'todos' ||
+          github.event.inputs.script_selecionado == 'deputados'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/coletar_deputados.py
+
+      - name: Executar coleta (Presenças)
+        if: |
+          github.event_name == 'schedule' ||
+          github.event.inputs.script_selecionado == 'todos' ||
+          github.event.inputs.script_selecionado == 'presencas'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/coletar_presencas.py

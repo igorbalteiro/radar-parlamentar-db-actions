@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 5  # paralelas simultâneas — respeita o rate limit da API
+MAX_WORKERS = 5
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -20,11 +20,10 @@ DATA_INICIO = (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
 
 # ─── Funções de coleta ──────────────────────────────────────────────────────
 
-def get_deputados():
-    """Retorna lista com todos os 513 deputados ativos."""
-    r = requests.get(f"{BASE_URL}/deputados", params={"itens": 513})
-    r.raise_for_status()
-    return r.json()["dados"]
+def get_deputados_do_banco():
+    """Retorna lista de deputados já cadastrados na tabela deputados do Supabase."""
+    res = supabase.table("deputados").select("id, nome").execute()
+    return res.data
 
 
 def get_gastos(deputado_id):
@@ -34,7 +33,6 @@ def get_gastos(deputado_id):
     """
     total = 0.0
 
-    # Gera os meses que cobrem a janela de 30 dias
     meses = set()
     for i in range(31):
         dia = hoje - timedelta(days=i)
@@ -114,27 +112,16 @@ def get_proposicoes(deputado_id):
 def processar_deputado(dep):
     """
     Executada em paralelo para cada deputado.
-    Coleta gastos, discursos e proposições, depois persiste no Supabase.
+    Coleta métricas e persiste na tabela metricas_deputados.
     Retorna o nome do deputado para log ou lança exceção em caso de falha.
     """
     dep_id = dep["id"]
     nome = dep["nome"]
 
-    # Upsert do cadastro básico do deputado
-    supabase.table("deputados").upsert({
-        "id": dep_id,
-        "nome": nome,
-        "partido": dep.get("siglaPartido"),
-        "uf": dep.get("siglaUf"),
-        "atualizado_em": hoje.isoformat(),
-    }).execute()
-
-    # Coleta das métricas (cada chamada é independente)
     gastos = get_gastos(dep_id)
     discursos = get_discursos(dep_id)
     proposicoes = get_proposicoes(dep_id)
 
-    # Upsert das métricas do dia — ignora duplicatas via constraint única
     supabase.table("metricas_deputados").upsert(
         {
             "deputado_id": dep_id,
@@ -154,15 +141,12 @@ def processar_deputado(dep):
 def main():
     print(f"Iniciando coleta: {DATA_INICIO} → {DATA_FIM}")
 
-    deputados = get_deputados()
-    print(f"{len(deputados)} deputados encontrados. Iniciando coleta paralela...\n")
+    deputados = get_deputados_do_banco()
+    print(f"{len(deputados)} deputados encontrados no banco. Iniciando coleta paralela...\n")
 
     concluidos = 0
     erros = []
 
-    # ThreadPoolExecutor: mantém até MAX_WORKERS threads rodando ao mesmo tempo.
-    # submit() agenda cada deputado como uma tarefa independente.
-    # as_completed() itera conforme cada tarefa termina (não necessariamente em ordem).
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
             executor.submit(processar_deputado, dep): dep["nome"]
@@ -172,14 +156,13 @@ def main():
         for future in as_completed(futures):
             nome = futures[future]
             try:
-                future.result()  # relança exceção se a tarefa falhou
+                future.result()
                 concluidos += 1
                 print(f"[{concluidos}/{len(deputados)}] {nome}")
             except Exception as e:
                 erros.append(nome)
                 print(f"[ERRO] {nome}: {e}")
 
-    # Limpeza de registros com mais de 30 dias (janela rolante)
     supabase.table("metricas_deputados") \
         .delete() \
         .lt("data_referencia", DATA_INICIO) \

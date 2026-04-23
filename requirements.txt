@@ -1,3 +1,4 @@
 requests
 supabase
 python-dateutil
+beautifulsoup4
