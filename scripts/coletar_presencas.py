@@ -94,8 +94,8 @@ def processar_deputado(dep):
         {
             "deputado_id": dep_id,
             "data_referencia": hoje.strftime("%Y-%m-%d"),
-            "total_sessoes": presencas["total_sessoes"],
-            "sessoes_presentes": presencas["presencas"],
+            "qtd_total_sessoes": presencas["total_sessoes"],
+            "qtd_sessoes_presentes": presencas["presencas"],
         },
         on_conflict="deputado_id,data_referencia",
     ).execute()
