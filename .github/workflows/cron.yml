@@ -23,7 +23,6 @@ jobs:
     name: Coleta diária (metricas + emendas)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Roda se: for o cron das 06h OU execução manual de metricas/emendas/todos
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && (
@@ -62,17 +61,15 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_emendas.py
 
-  coletar_semanal:
-    name: Coleta semanal (deputados + presenças)
+  coletar_deputados:
+    name: Coleta semanal (deputados)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Roda se: for o cron dos sábados OU execução manual de deputados/presencas/todos
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 6') ||
       (github.event_name == 'workflow_dispatch' && (
         github.event.inputs.script_selecionado == 'todos' ||
-        github.event.inputs.script_selecionado == 'deputados' ||
-        github.event.inputs.script_selecionado == 'presencas'
+        github.event.inputs.script_selecionado == 'deputados'
       ))
 
     steps:
@@ -86,20 +83,33 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Executar coleta (Deputados)
-        if: |
-          github.event_name == 'schedule' ||
-          github.event.inputs.script_selecionado == 'todos' ||
-          github.event.inputs.script_selecionado == 'deputados'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_deputados.py
 
+  coletar_presencas:
+    name: Coleta semanal (presenças)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 6') ||
+      (github.event_name == 'workflow_dispatch' && (
+        github.event.inputs.script_selecionado == 'todos' ||
+        github.event.inputs.script_selecionado == 'presencas'
+      ))
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
       - name: Executar coleta (Presenças)
-        if: |
-          github.event_name == 'schedule' ||
-          github.event.inputs.script_selecionado == 'todos' ||
-          github.event.inputs.script_selecionado == 'presencas'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
