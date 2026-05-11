@@ -59,7 +59,7 @@ def enviar_push(tokens, titulo, corpo, data={}):
 
 def carregar_usuarios_e_preferencias():
     res = supabase.table("notificacoes_preferencias").select(
-        "user_id, parlamentares, despesas, emendas, votacoes, proposicoes"
+        "user_id, parlamentares, despesas, emendas"
     ).execute()
     return res.data
 
@@ -90,9 +90,9 @@ def carregar_favoritos(user_id):
 
 # ─── Notificadores por tema ──────────────────────────────────────────────────
 
-def notificar_parlamentares(user_id, tokens):
+def notificar_parlamentares(user_id):
     favoritos = carregar_favoritos(user_id)
-    deputados_com_atualizacao = []
+    atualizacoes_geradas = 0
 
     for fav in favoritos:
         dep_id = fav["deputado_id"]
@@ -123,42 +123,20 @@ def notificar_parlamentares(user_id, tokens):
         if proposicoes > 0:
             partes.append(f"{proposicoes} proposição(ões)")
 
-        deputados_com_atualizacao.append({
-            "id": dep_id,
-            "nome": nome,
-            "resumo": " e ".join(partes),
-        })
-
         inserir_notificacao(
-            user_id, "parlamentares",
-            f"Atualização — {nome}",
-            f"{nome} teve ontem: {' e '.join(partes)}.",
-            dep_id
+            user_id=user_id,
+            tema="parlamentares",
+            titulo=nome,
+            corpo=f"{nome} teve ontem: {' e '.join(partes)}.",
+            deputado_id=dep_id
         )
+        atualizacoes_geradas += 1
 
-    if not deputados_com_atualizacao:
-        return
+    return atualizacoes_geradas
 
-    total = len(deputados_com_atualizacao)
-    sobrenomes = [d["nome"].split()[-1] for d in deputados_com_atualizacao]
-
-    if total == 1:
-        corpo = f"{sobrenomes[0]} teve atualizações ontem."
-    elif total == 2:
-        corpo = f"{sobrenomes[0]} e {sobrenomes[1]} tiveram atualizações ontem."
-    else:
-        corpo = f"{sobrenomes[0]}, {sobrenomes[1]} e mais {total - 2} tiveram atualizações ontem."
-
-    enviar_push(
-        tokens,
-        titulo=f"Parlamentares — {total} atualização(ões)",
-        corpo=corpo,
-        data={"tema": "parlamentares"}
-    )
-
-def notificar_despesas(user_id, tokens):
+def notificar_despesas(user_id):
     favoritos = carregar_favoritos(user_id)
-    deputados_com_despesa = []
+    atualizacoes_geradas = 0
 
     for fav in favoritos:
         dep_id = fav["deputado_id"]
@@ -173,47 +151,25 @@ def notificar_despesas(user_id, tokens):
             .eq("data_referencia", str(ontem)) \
             .execute()
 
-        if not res.data:
+        if not res.data or res.data[0]["total_gastos"] <= 0:
             continue
 
         gastos = res.data[0]["total_gastos"]
-        if gastos <= 0:
-            continue
-
-        deputados_com_despesa.append({"nome": nome, "gastos": gastos, "id": dep_id})
 
         inserir_notificacao(
-            user_id, "despesas",
-            f"Nova despesa — {nome}",
-            f"{nome} registrou R$ {gastos:,.2f} em despesas ontem.",
-            dep_id
+            user_id=user_id,
+            tema="despesas",
+            titulo=nome,
+            corpo=f"{nome} registrou R$ {gastos:,.2f} em despesas ontem.",
+            deputado_id=dep_id
         )
+        atualizacoes_geradas += 1
 
-    if not deputados_com_despesa:
-        return
+    return atualizacoes_geradas
 
-    # Monta o texto agrupado para o push
-    total = len(deputados_com_despesa)
-    nomes = [d["nome"].split()[-1] for d in deputados_com_despesa]  # só sobrenome
-
-    if total == 1:
-        corpo = f"{nomes[0]} registrou novas despesas ontem."
-    elif total == 2:
-        corpo = f"{nomes[0]} e {nomes[1]} registraram novas despesas ontem."
-    else:
-        corpo = f"{nomes[0]}, {nomes[1]} e mais {total - 2} registraram novas despesas ontem."
-
-    # Um único push para o tema inteiro
-    enviar_push(
-        tokens,
-        titulo=f"Despesas — {total} atualização(ões)",
-        corpo=corpo,
-        data={"tema": "despesas"}
-    )
-
-def notificar_emendas(user_id, tokens):
+def notificar_emendas(user_id):
     favoritos = carregar_favoritos(user_id)
-    deputados_com_emenda = []
+    atualizacoes_geradas = 0
 
     for fav in favoritos:
         dep_id = fav["deputado_id"]
@@ -231,123 +187,20 @@ def notificar_emendas(user_id, tokens):
         if not res.data:
             continue
 
-        total_empenhado = sum(
-            r["valor_empenhado"] for r in res.data
-            if r["valor_empenhado"] is not None
-        )
-
+        total_empenhado = sum(r["valor_empenhado"] for r in res.data if r["valor_empenhado"])
         if total_empenhado <= 0:
             continue
 
-        deputados_com_emenda.append({
-            "id": dep_id,
-            "nome": nome,
-            "total": total_empenhado,
-        })
-
         inserir_notificacao(
-            user_id, "emendas",
-            f"Nova emenda — {nome}",
-            f"{nome} teve R$ {total_empenhado:,.2f} empenhados em emendas.",
-            dep_id
+            user_id=user_id, 
+            tema="emendas",
+            titulo=nome,
+            corpo=f"{nome} teve R$ {total_empenhado:,.2f} empenhados em emendas.",
+            deputado_id=dep_id
         )
+        atualizacoes_geradas += 1
 
-    if not deputados_com_emenda:
-        return
-
-    total = len(deputados_com_emenda)
-    sobrenomes = [d["nome"].split()[-1] for d in deputados_com_emenda]
-
-    if total == 1:
-        corpo = f"{sobrenomes[0]} teve emendas empenhadas."
-    elif total == 2:
-        corpo = f"{sobrenomes[0]} e {sobrenomes[1]} tiveram emendas empenhadas."
-    else:
-        corpo = f"{sobrenomes[0]}, {sobrenomes[1]} e mais {total - 2} tiveram emendas empenhadas."
-
-    enviar_push(
-        tokens,
-        titulo=f"Emendas — {total} atualização(ões)",
-        corpo=corpo,
-        data={"tema": "emendas"}
-    )
-
-def notificar_votacoes(user_id, tokens):
-    if ja_notificou(user_id, "votacoes", None, ontem):
-        return
-
-    res = supabase.table("metricas_deputados") \
-        .select("deputado_id") \
-        .eq("data_referencia", str(ontem)) \
-        .gt("qtd_discursos", 0) \
-        .limit(1) \
-        .execute()
-
-    if not res.data:
-        return
-
-    titulo = "Novas votações no Plenário"
-    corpo = "Houve votações nominais ontem na Câmara. Veja como seus parlamentares votaram."
-
-    inserir_notificacao(user_id, "votacoes", titulo, corpo)
-    enviar_push(tokens, titulo, corpo, {"tema": "votacoes"})
-
-def notificar_proposicoes(user_id, tokens):
-    favoritos = carregar_favoritos(user_id)
-    deputados_com_proposicao = []
-
-    for fav in favoritos:
-        dep_id = fav["deputado_id"]
-        nome = fav["deputados"]["nome"]
-
-        if ja_notificou(user_id, "proposicoes", dep_id, ontem):
-            continue
-
-        res = supabase.table("metricas_deputados") \
-            .select("qtd_proposicoes") \
-            .eq("deputado_id", dep_id) \
-            .eq("data_referencia", str(ontem)) \
-            .execute()
-
-        if not res.data:
-            continue
-
-        qtd = res.data[0]["qtd_proposicoes"]
-        if qtd == 0:
-            continue
-
-        deputados_com_proposicao.append({
-            "id": dep_id,
-            "nome": nome,
-            "qtd": qtd,
-        })
-
-        inserir_notificacao(
-            user_id, "proposicoes",
-            f"Nova proposição — {nome}",
-            f"{nome} apresentou {qtd} proposição(ões) ontem.",
-            dep_id
-        )
-
-    if not deputados_com_proposicao:
-        return
-
-    total = len(deputados_com_proposicao)
-    sobrenomes = [d["nome"].split()[-1] for d in deputados_com_proposicao]
-
-    if total == 1:
-        corpo = f"{sobrenomes[0]} apresentou proposição(ões) ontem."
-    elif total == 2:
-        corpo = f"{sobrenomes[0]} e {sobrenomes[1]} apresentaram proposições ontem."
-    else:
-        corpo = f"{sobrenomes[0]}, {sobrenomes[1]} e mais {total - 2} apresentaram proposições ontem."
-
-    enviar_push(
-        tokens,
-        titulo=f"Proposições — {total} atualização(ões)",
-        corpo=corpo,
-        data={"tema": "proposicoes"}
-    )
+    return atualizacoes_geradas
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -360,23 +213,28 @@ def main():
     for usuario in usuarios:
         user_id = usuario["user_id"]
         tokens = get_tokens(user_id)
+        
+        total_atualizacoes_usuario = 0
 
         if usuario.get("parlamentares"):
-            notificar_parlamentares(user_id, tokens)
+            total_atualizacoes_usuario += notificar_parlamentares(user_id)
 
         if usuario.get("despesas"):
-            notificar_despesas(user_id, tokens)
+            total_atualizacoes_usuario += notificar_despesas(user_id)
 
         if usuario.get("emendas"):
-            notificar_emendas(user_id, tokens)
+            total_atualizacoes_usuario += notificar_emendas(user_id)
 
-        if usuario.get("votacoes"):
-            notificar_votacoes(user_id, tokens)
+        # Dispara APENAS UM PUSH por usuário se ele teve alguma atualização
+        if total_atualizacoes_usuario > 0:
+            enviar_push(
+                tokens,
+                titulo="Radar Parlamentar",
+                corpo=f"Você tem {total_atualizacoes_usuario} nova(s) atualização(ões) sobre os temas que acompanha.",
+                data={"rota": "Notificacoes"}
+            )
 
-        if usuario.get("proposicoes"):
-            notificar_proposicoes(user_id, tokens)
-
-    print("✅ Notificações enviadas.")
+    print("✅ Processo finalizado.")
 
 
 if __name__ == "__main__":
