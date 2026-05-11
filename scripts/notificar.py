@@ -65,11 +65,27 @@ def carregar_usuarios_e_preferencias():
 
 
 def carregar_favoritos(user_id):
+    """
+    Busca os parlamentares favoritados pelo usuário.
+    A tabela favoritos usa item_id (TEXT) como ID do deputado
+    e dados_snapshot (JSONB) para armazenar o nome.
+    """
     res = supabase.table("favoritos") \
-        .select("deputado_id, deputados(nome)") \
+        .select("item_id, dados_snapshot") \
         .eq("user_id", user_id) \
+        .eq("tipo", "parlamentar") \
         .execute()
-    return res.data
+
+    return [
+        {
+            "deputado_id": int(fav["item_id"]),
+            "deputados": {
+                "nome": fav["dados_snapshot"].get("nome", "")
+            }
+        }
+        for fav in res.data
+        if fav.get("item_id")
+    ]
 
 
 # ─── Notificadores por tema ──────────────────────────────────────────────────
@@ -275,7 +291,6 @@ def notificar_votacoes(user_id, tokens):
 
     inserir_notificacao(user_id, "votacoes", titulo, corpo)
     enviar_push(tokens, titulo, corpo, {"tema": "votacoes"})
-
 
 def notificar_proposicoes(user_id, tokens):
     favoritos = carregar_favoritos(user_id)
