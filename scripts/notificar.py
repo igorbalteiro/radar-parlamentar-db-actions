@@ -227,10 +227,12 @@ def main():
 
         # Dispara APENAS UM PUSH por usuário se ele teve alguma atualização
         if total_atualizacoes_usuario > 0:
+            texto_atualizacao = "nova atualização" if total_atualizacoes_usuario == 1 else "novas atualizações"
+
             enviar_push(
                 tokens,
                 titulo="Radar Parlamentar",
-                corpo=f"Você tem {total_atualizacoes_usuario} nova(s) atualização(ões) sobre os temas que acompanha.",
+                corpo=f"Você tem {total_atualizacoes_usuario} {texto_atualizacao} sobre os temas que acompanha.",
                 data={"rota": "Notificacoes"}
             )
 
