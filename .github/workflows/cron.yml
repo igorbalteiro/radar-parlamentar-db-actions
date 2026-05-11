@@ -51,16 +51,6 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_metricas.py
 
-      - name: Enviar notificações
-        if: |
-          github.event_name == 'schedule' ||
-          github.event.inputs.script_selecionado == 'todos' ||
-          github.event.inputs.script_selecionado == 'metricas'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/notificar.py
-
       - name: Executar coleta (Emendas)
         if: |
           github.event_name == 'schedule' ||
@@ -70,6 +60,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/coletar_emendas.py
+
+      - name: Enviar notificações
+        if: |
+          github.event_name == 'schedule' ||
+          github.event.inputs.script_selecionado == 'todos' ||
+          github.event.inputs.script_selecionado == 'metricas'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/notificar.py
 
   coletar_deputados:
     name: Coleta semanal (deputados)
