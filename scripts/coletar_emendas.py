@@ -11,6 +11,16 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Referer": "https://portaldatransparencia.gov.br/emendas/consulta",
+    "Origin": "https://portaldatransparencia.gov.br",
+    "Connection": "keep-alive",
+}
+
 ANO_ATUAL = datetime.today().year
 TAMANHO_PAGINA = 30
 BASE_URL = "https://portaldatransparencia.gov.br/emendas/consulta/resultado"
@@ -22,11 +32,6 @@ COLUNAS = ",".join([
     "valorEmpenhado", "valorLiquidado", "valorPago",
     "valorRestoInscrito", "valorRestoCancelado", "valorRestoPago",
 ])
-
-HEADERS = {
-    "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0",
-}
 
 
 def parse_valor(valor):
