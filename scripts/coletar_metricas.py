@@ -54,7 +54,7 @@ def get_gastos(deputado_id):
             dados = r.json().get("dados", [])
             if not dados:
                 break
-            total += sum(d.get("valorLiquido", 0) for d in dados)
+            total += sum(d.get("valorDocumento", 0) for d in dados)
             pagina += 1
 
     return total

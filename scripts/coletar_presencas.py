@@ -4,6 +4,7 @@ from datetime import datetime
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
+import re
 
 # ─── Configuração ───────────────────────────────────────────────────────────
 
@@ -41,17 +42,12 @@ def get_presencas_plenario(deputado_id):
     soup = BeautifulSoup(r.text, "html.parser")
 
     def extrair_valor(label):
-        """
-        Localiza o <li> que contém o texto do label e extrai
-        o número inteiro que vem antes de 'dias' ou 'indisponível'.
-        Retorna 0 se não encontrado ou indisponível.
-        """
         for li in soup.find_all("li"):
             texto = li.get_text(separator=" ", strip=True)
             if label in texto:
-                partes = texto.replace(label, "").strip().split()
-                if partes and partes[0].isdigit():
-                    return int(partes[0])
+                numeros = re.findall(r'\d+', texto)
+                if numeros:
+                    return int(numeros[0])
         return 0
 
     presencas = extrair_valor("Presenças na Câmara")
