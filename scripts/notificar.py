@@ -36,13 +36,15 @@ def ja_notificou(user_id, tema, deputado_id, data):
     return len(query.execute().data) > 0
 
 
-def inserir_notificacao(user_id, tema, titulo, corpo, deputado_id=None):
+def inserir_notificacao(user_id, tema, titulo, corpo, deputado_id=None, referencia_id=None, referencia_tipo=None):
     supabase.table("notificacoes").insert({
         "user_id": user_id,
         "tema": tema,
         "titulo": titulo,
         "corpo": corpo,
         "deputado_id": deputado_id,
+        "referencia_id": referencia_id,
+        "referencia_tipo": referencia_tipo,
         "lida": False,
     }).execute()
 
@@ -117,20 +119,29 @@ def notificar_parlamentares(user_id):
         if discursos == 0 and proposicoes == 0:
             continue
 
-        partes = []
         if discursos > 0:
-            partes.append(f"{discursos} discurso(s)")
-        if proposicoes > 0:
-            partes.append(f"{proposicoes} proposição(ões)")
+            inserir_notificacao(
+                user_id=user_id,
+                tema="parlamentares",
+                titulo=nome,
+                corpo=f"{nome} fez {discursos} discurso(s) ontem.",
+                deputado_id=dep_id,
+                referencia_id=str(dep_id),
+                referencia_tipo="discurso"
+            )
+            atualizacoes_geradas += 1
 
-        inserir_notificacao(
-            user_id=user_id,
-            tema="parlamentares",
-            titulo=nome,
-            corpo=f"{nome} teve ontem: {' e '.join(partes)}.",
-            deputado_id=dep_id
-        )
-        atualizacoes_geradas += 1
+        if proposicoes > 0:
+            inserir_notificacao(
+                user_id=user_id,
+                tema="parlamentares",
+                titulo=nome,
+                corpo=f"{nome} apresentou {proposicoes} proposição(ões) ontem.",
+                deputado_id=dep_id,
+                referencia_id=str(dep_id),
+                referencia_tipo="proposicao"
+            )
+            atualizacoes_geradas += 1
 
     return atualizacoes_geradas
 
@@ -161,7 +172,9 @@ def notificar_despesas(user_id):
             tema="despesas",
             titulo=nome,
             corpo=f"{nome} registrou R$ {gastos:,.2f} em despesas ontem.",
-            deputado_id=dep_id
+            deputado_id=dep_id,
+            referencia_id=str(dep_id),
+            referencia_tipo="despesa"
         )
         atualizacoes_geradas += 1
 
@@ -179,7 +192,7 @@ def notificar_emendas(user_id):
             continue
 
         res = supabase.table("emendas_parlamentares") \
-            .select("valor_empenhado") \
+            .select("id, valor_empenhado") \
             .eq("deputado_id", dep_id) \
             .gte("coletado_em", str(ontem)) \
             .execute()
@@ -191,12 +204,18 @@ def notificar_emendas(user_id):
         if total_empenhado <= 0:
             continue
 
+        # Usa o ID da primeira emenda como referência — o app navega
+        # para a lista de emendas do deputado filtrada pelo dia
+        primeira_emenda_id = str(res.data[0]["id"])
+
         inserir_notificacao(
-            user_id=user_id, 
+            user_id=user_id,
             tema="emendas",
             titulo=nome,
             corpo=f"{nome} teve R$ {total_empenhado:,.2f} empenhados em emendas.",
-            deputado_id=dep_id
+            deputado_id=dep_id,
+            referencia_id=primeira_emenda_id,
+            referencia_tipo="emenda"
         )
         atualizacoes_geradas += 1
 
