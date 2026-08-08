@@ -1,15 +1,16 @@
 import os
-import requests
 from datetime import datetime, timedelta
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http_client import get_json
 
 # ─── Configuração ───────────────────────────────────────────────────────────
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 5
+MAX_WORKERS = 8
+TAMANHO_LOTE = 100
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -41,7 +42,7 @@ def get_gastos(deputado_id):
     for ano, mes in meses:
         pagina = 1
         while True:
-            r = requests.get(
+            payload = get_json(
                 f"{BASE_URL}/deputados/{deputado_id}/despesas",
                 params={
                     "ano": ano,
@@ -50,8 +51,7 @@ def get_gastos(deputado_id):
                     "pagina": pagina,
                 },
             )
-            r.raise_for_status()
-            dados = r.json().get("dados", [])
+            dados = payload.get("dados", [])
             if not dados:
                 break
             total += sum(d.get("valorDocumento", 0) for d in dados)
@@ -65,7 +65,7 @@ def get_discursos(deputado_id):
     total = 0
     pagina = 1
     while True:
-        r = requests.get(
+        payload = get_json(
             f"{BASE_URL}/deputados/{deputado_id}/discursos",
             params={
                 "dataInicio": DATA_INICIO,
@@ -74,8 +74,7 @@ def get_discursos(deputado_id):
                 "pagina": pagina,
             },
         )
-        r.raise_for_status()
-        dados = r.json().get("dados", [])
+        dados = payload.get("dados", [])
         if not dados:
             break
         total += len(dados)
@@ -88,7 +87,7 @@ def get_proposicoes(deputado_id):
     total = 0
     pagina = 1
     while True:
-        r = requests.get(
+        payload = get_json(
             f"{BASE_URL}/proposicoes",
             params={
                 "idDeputadoAutor": deputado_id,
@@ -98,8 +97,7 @@ def get_proposicoes(deputado_id):
                 "pagina": pagina,
             },
         )
-        r.raise_for_status()
-        dados = r.json().get("dados", [])
+        dados = payload.get("dados", [])
         if not dados:
             break
         total += len(dados)
@@ -122,18 +120,13 @@ def processar_deputado(dep):
     discursos = get_discursos(dep_id)
     proposicoes = get_proposicoes(dep_id)
 
-    supabase.table("metricas_deputados").upsert(
-        {
-            "deputado_id": dep_id,
-            "data_referencia": DATA_FIM,
-            "total_gastos": gastos,
-            "qtd_discursos": discursos,
-            "qtd_proposicoes": proposicoes,
-        },
-        on_conflict="deputado_id,data_referencia",
-    ).execute()
-
-    return nome
+    return {
+        "deputado_id": dep_id,
+        "data_referencia": DATA_FIM,
+        "total_gastos": gastos,
+        "qtd_discursos": discursos,
+        "qtd_proposicoes": proposicoes,
+    }
 
 
 # ─── Execução principal ─────────────────────────────────────────────────────
@@ -146,6 +139,7 @@ def main():
 
     concluidos = 0
     erros = []
+    registros = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
@@ -156,12 +150,18 @@ def main():
         for future in as_completed(futures):
             nome = futures[future]
             try:
-                future.result()
+                registros.append(future.result())
                 concluidos += 1
                 print(f"[{concluidos}/{len(deputados)}] {nome}")
             except Exception as e:
                 erros.append(nome)
                 print(f"[ERRO] {nome}: {e}")
+
+    for inicio in range(0, len(registros), TAMANHO_LOTE):
+        supabase.table("metricas_deputados").upsert(
+            registros[inicio:inicio + TAMANHO_LOTE],
+            on_conflict="deputado_id,data_referencia",
+        ).execute()
 
     supabase.table("metricas_deputados") \
         .delete() \
@@ -170,7 +170,7 @@ def main():
 
     print(f"\n✅ Concluído: {concluidos} deputados processados.")
     if erros:
-        print(f"⚠️  Falhas ({len(erros)}): {', '.join(erros)}")
+        raise RuntimeError(f"Falhas em {len(erros)} deputado(s): {', '.join(erros)}")
 
 
 if __name__ == "__main__":

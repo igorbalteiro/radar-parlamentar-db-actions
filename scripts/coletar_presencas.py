@@ -1,10 +1,10 @@
 import os
-import requests
 from datetime import datetime
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 import re
+from http_client import get
 
 # ─── Configuração ───────────────────────────────────────────────────────────
 
@@ -12,7 +12,8 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 BASE_URL_CAMARA = "https://www.camara.leg.br/deputados"
-MAX_WORKERS = 5
+MAX_WORKERS = 8
+TAMANHO_LOTE = 100
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -36,8 +37,7 @@ def get_presencas_plenario(deputado_id):
     ausencias_nao_justificadas e total_sessoes.
     """
     url = f"{BASE_URL_CAMARA}/{deputado_id}"
-    r = requests.get(url, params={"ano": ANO_ATUAL}, timeout=30)
-    r.raise_for_status()
+    r = get(url, params={"ano": ANO_ATUAL})
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -68,14 +68,13 @@ def get_presencas_plenario(deputado_id):
 def processar_deputado(dep):
     """
     Executada em paralelo para cada deputado.
-    Coleta presenças e persiste nas tabelas presencas_deputados
-    e metricas_deputados.
+    Coleta presenças e monta os registros para persistência em lote.
     """
     dep_id = dep["id"]
     presencas = get_presencas_plenario(dep_id)
 
-    supabase.table("presencas_deputados").upsert(
-        {
+    return {
+        "presenca": {
             "id_deputado": dep_id,
             "ano": ANO_ATUAL,
             "total_sessoes": presencas["total_sessoes"],
@@ -83,20 +82,13 @@ def processar_deputado(dep):
             "faltas_justificadas": presencas["ausencias_justificadas"],
             "faltas_nao_justificadas": presencas["ausencias_nao_justificadas"],
         },
-        on_conflict="id_deputado,ano",
-    ).execute()
-
-    supabase.table("metricas_deputados").upsert(
-        {
+        "metrica": {
             "deputado_id": dep_id,
             "data_referencia": hoje.strftime("%Y-%m-%d"),
             "total_sessoes": presencas["total_sessoes"],
             "sessoes_presentes": presencas["presencas"],
         },
-        on_conflict="deputado_id,data_referencia",
-    ).execute()
-
-    return dep["nome"]
+    }
 
 
 # ─── Execução principal ─────────────────────────────────────────────────────
@@ -109,6 +101,8 @@ def main():
 
     concluidos = 0
     erros = []
+    registros_presencas = []
+    registros_metricas = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
@@ -119,16 +113,28 @@ def main():
         for future in as_completed(futures):
             nome = futures[future]
             try:
-                future.result()
+                registros = future.result()
+                registros_presencas.append(registros["presenca"])
+                registros_metricas.append(registros["metrica"])
                 concluidos += 1
                 print(f"[{concluidos}/{len(deputados)}] {nome}")
             except Exception as e:
                 erros.append(nome)
                 print(f"[ERRO] {nome}: {e}")
 
-    print(f"\n✅ Concluído: {concluidos} deputados processados.")
+    for inicio in range(0, len(registros_presencas), TAMANHO_LOTE):
+        supabase.table("presencas_deputados").upsert(
+            registros_presencas[inicio:inicio + TAMANHO_LOTE],
+            on_conflict="id_deputado,ano",
+        ).execute()
+        supabase.table("metricas_deputados").upsert(
+            registros_metricas[inicio:inicio + TAMANHO_LOTE],
+            on_conflict="deputado_id,data_referencia",
+        ).execute()
+
+    print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.")
     if erros:
-        print(f"⚠️  Falhas ({len(erros)}): {', '.join(erros)}")
+        raise RuntimeError(f"Falhas em {len(erros)} deputado(s): {', '.join(erros)}")
 
 
 if __name__ == "__main__":

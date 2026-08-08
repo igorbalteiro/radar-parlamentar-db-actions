@@ -1,10 +1,10 @@
 import os
 import math
-import requests
 from datetime import datetime
 from supabase import create_client
 import re
 import unicodedata
+from http_client import get_json
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
@@ -22,7 +22,9 @@ HEADERS = {
 }
 
 ANO_ATUAL = datetime.today().year
-TAMANHO_PAGINA = 30
+# O portal aceita até 100 itens; reduzir de 30 para 100 diminui em ~70% as
+# requisições e também reduz a chance de encontrar uma resposta transitória.
+TAMANHO_PAGINA = 100
 BASE_URL = "https://portaldatransparencia.gov.br/emendas/consulta/resultado"
 
 COLUNAS = ",".join([
@@ -82,9 +84,7 @@ def buscar_pagina(offset):
         "ate": ANO_ATUAL,
         "colunasSelecionadas": COLUNAS,
     }
-    r = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    payload = r.json()
+    payload = get_json(BASE_URL, params=params, headers=HEADERS)
     return payload.get("data", []), payload.get("recordsTotal", 0)
 
 

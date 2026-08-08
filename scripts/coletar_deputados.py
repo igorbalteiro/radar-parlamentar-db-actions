@@ -1,8 +1,8 @@
 import os
-import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http_client import get_json
 
 # ─── Configuração ───────────────────────────────────────────────────────────
 
@@ -10,7 +10,8 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 5  # paralelas simultâneas — respeita o rate limit da API
+MAX_WORKERS = 12
+TAMANHO_LOTE = 100
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -22,18 +23,24 @@ DATA_HOJE = hoje.strftime("%Y-%m-%d")
 
 def get_deputados():
     """Retorna lista com todos os deputados da legislatura atual."""
-    r = requests.get(f"{BASE_URL}/deputados?idLegislatura=57")
-    r.raise_for_status()
-    return r.json()["dados"]
+    deputados = []
+    pagina = 1
+    while True:
+        dados = get_json(
+            f"{BASE_URL}/deputados",
+            params={"idLegislatura": 57, "itens": 100, "pagina": pagina},
+        )["dados"]
+        deputados.extend(dados)
+        if len(dados) < 100:
+            return deputados
+        pagina += 1
 
 def get_status_deputado(deputado_id):
     """
     Busca o detalhe individual do deputado e retorna a situação atual do mandato.
     Ex: 'Exercício', 'Licença', 'Vacância', etc.
     """
-    r = requests.get(f"{BASE_URL}/deputados/{deputado_id}")
-    r.raise_for_status()
-    dados = r.json().get("dados", {})
+    dados = get_json(f"{BASE_URL}/deputados/{deputado_id}").get("dados", {})
     return dados.get("ultimoStatus", {}).get("situacao")
 
 
@@ -42,16 +49,14 @@ def get_status_deputado(deputado_id):
 def processar_deputado(dep):
     """
     Executada em paralelo para cada deputado.
-    Coleta gastos, discursos e proposições, depois persiste no Supabase.
-    Retorna o nome do deputado para log ou lança exceção em caso de falha.
+    Coleta o status e monta o cadastro para persistência em lote.
     """
     dep_id = dep["id"]
     nome = dep["nome"]
 
     status = get_status_deputado(dep_id)
 
-    # Upsert do cadastro básico do deputado
-    supabase.table("deputados").upsert({
+    return {
         "id": dep_id,
         "nome": nome,
         "partido": dep.get("siglaPartido"),
@@ -59,9 +64,7 @@ def processar_deputado(dep):
         "url_foto": dep.get("urlFoto"),
         "status": status,
         "atualizado_em": hoje.isoformat(),
-    }).execute()
-
-    return nome
+    }
 
 
 # ─── Execução principal ─────────────────────────────────────────────────────
@@ -74,10 +77,8 @@ def main():
 
     concluidos = 0
     erros = []
+    registros = []
 
-    # ThreadPoolExecutor: mantém até MAX_WORKERS threads rodando ao mesmo tempo.
-    # submit() agenda cada deputado como uma tarefa independente.
-    # as_completed() itera conforme cada tarefa termina (não necessariamente em ordem).
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
             executor.submit(processar_deputado, dep): dep["nome"]
@@ -87,17 +88,18 @@ def main():
         for future in as_completed(futures):
             nome = futures[future]
             try:
-                future.result()  # relança exceção se a tarefa falhou
+                registros.append(future.result())  # relança exceção se a tarefa falhou
                 concluidos += 1
                 print(f"[{concluidos}/{len(deputados)}] {nome}")
             except Exception as e:
                 erros.append(nome)
                 print(f"[ERRO] {nome}: {e}")
+    for inicio in range(0, len(registros), TAMANHO_LOTE):
+        supabase.table("deputados").upsert(registros[inicio:inicio + TAMANHO_LOTE]).execute()
 
-
-    print(f"\n✅ Concluído: {concluidos} deputados processados.")
+    print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.")
     if erros:
-        print(f"⚠️  Falhas ({len(erros)}): {', '.join(erros)}")
+        raise RuntimeError(f"Falhas em {len(erros)} deputado(s): {', '.join(erros)}")
 
 
 if __name__ == "__main__":
