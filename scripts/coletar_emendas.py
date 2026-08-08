@@ -84,7 +84,15 @@ def buscar_pagina(offset):
         "ate": ANO_ATUAL,
         "colunasSelecionadas": COLUNAS,
     }
-    payload = get_json(BASE_URL, params=params, headers=HEADERS)
+    # O portal responde 202 com HTML vazio enquanto prepara resultados sob
+    # carga. Fazemos polling por até cerca de dois minutos antes de desistir.
+    payload = get_json(
+        BASE_URL,
+        params=params,
+        headers=HEADERS,
+        tentativas=8,
+        atraso_maximo=60,
+    )
     return payload.get("data", []), payload.get("recordsTotal", 0)
 
 

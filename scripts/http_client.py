@@ -53,6 +53,7 @@ def get(url, *, params=None, headers=None, timeout=(CONNECT_TIMEOUT, READ_TIMEOU
 def get_json(url, **kwargs):
     """Faz GET e valida JSON, inclusive quando um proxy retorna HTML com 200."""
     tentativas = kwargs.pop("tentativas", MAX_TENTATIVAS)
+    atraso_maximo = kwargs.pop("atraso_maximo", 8)
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
@@ -69,7 +70,7 @@ def get_json(url, **kwargs):
             ultimo_erro = erro
             if tentativa == tentativas or not deve_tentar_novamente(erro):
                 break
-            espera = min(2 ** (tentativa - 1), 8) + random.uniform(0, 0.5)
+            espera = min(2 ** (tentativa - 1), atraso_maximo) + random.uniform(0, 0.5)
             print(f"  JSON/requisição inválida na tentativa {tentativa}/{tentativas} ({erro}); nova tentativa em {espera:.1f}s")
             time.sleep(espera)
     raise RespostaInvalida(f"Resposta inválida após {tentativas} tentativas: {ultimo_erro}") from ultimo_erro

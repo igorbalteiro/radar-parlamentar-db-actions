@@ -44,9 +44,15 @@ def get_status_deputado(deputado_id):
     return dados.get("ultimoStatus", {}).get("situacao")
 
 
+def carregar_status_anteriores():
+    """Permite manter o último status válido se a API falhar pontualmente."""
+    res = supabase.table("deputados").select("id, status").execute()
+    return {deputado["id"]: deputado.get("status") for deputado in res.data}
+
+
 # ─── Tarefa por deputado ────────────────────────────────────────────────────
 
-def processar_deputado(dep):
+def processar_deputado(dep, status_anteriores):
     """
     Executada em paralelo para cada deputado.
     Coleta o status e monta o cadastro para persistência em lote.
@@ -54,7 +60,12 @@ def processar_deputado(dep):
     dep_id = dep["id"]
     nome = dep["nome"]
 
-    status = get_status_deputado(dep_id)
+    try:
+        status = get_status_deputado(dep_id)
+        aviso = None
+    except Exception as erro:
+        status = status_anteriores.get(dep_id)
+        aviso = f"status não atualizado: {erro}"
 
     return {
         "id": dep_id,
@@ -64,7 +75,7 @@ def processar_deputado(dep):
         "url_foto": dep.get("urlFoto"),
         "status": status,
         "atualizado_em": hoje.isoformat(),
-    }
+    }, aviso
 
 
 # ─── Execução principal ─────────────────────────────────────────────────────
@@ -73,33 +84,36 @@ def main():
     print(f"Iniciando coleta: {DATA_HOJE}")
 
     deputados = get_deputados()
+    status_anteriores = carregar_status_anteriores()
     print(f"{len(deputados)} deputados encontrados. Iniciando coleta paralela...\n")
 
     concluidos = 0
-    erros = []
+    avisos = []
     registros = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(processar_deputado, dep): dep["nome"]
+            executor.submit(processar_deputado, dep, status_anteriores): dep["nome"]
             for dep in deputados
         }
 
         for future in as_completed(futures):
             nome = futures[future]
             try:
-                registros.append(future.result())  # relança exceção se a tarefa falhou
+                registro, aviso = future.result()
+                registros.append(registro)
+                if aviso:
+                    avisos.append(f"{nome}: {aviso}")
                 concluidos += 1
                 print(f"[{concluidos}/{len(deputados)}] {nome}")
             except Exception as e:
-                erros.append(nome)
                 print(f"[ERRO] {nome}: {e}")
     for inicio in range(0, len(registros), TAMANHO_LOTE):
         supabase.table("deputados").upsert(registros[inicio:inicio + TAMANHO_LOTE]).execute()
 
     print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.")
-    if erros:
-        raise RuntimeError(f"Falhas em {len(erros)} deputado(s): {', '.join(erros)}")
+    if avisos:
+        print(f"⚠️  Status mantido para {len(avisos)} deputado(s): {'; '.join(avisos)}")
 
 
 if __name__ == "__main__":
