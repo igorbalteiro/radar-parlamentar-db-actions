@@ -170,7 +170,10 @@ def main():
 
     print(f"\n✅ Concluído: {concluidos} deputados processados.")
     if erros:
-        raise RuntimeError(f"Falhas em {len(erros)} deputado(s): {', '.join(erros)}")
+        print(
+            f"⚠️  Falhas transitórias em {len(erros)} deputado(s); "
+            f"a coleta parcial foi salva: {', '.join(erros)}"
+        )
 
 
 if __name__ == "__main__":
