@@ -53,7 +53,8 @@ jobs:
   coletar_emendas:
     name: Coleta diária (emendas)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Uma página pode ficar em preparação no portal por alguns minutos.
+    timeout-minutes: 60
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && (

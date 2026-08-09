@@ -4,6 +4,7 @@ from datetime import datetime
 from supabase import create_client
 import re
 import unicodedata
+import requests
 from http_client import get_json
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -25,6 +26,9 @@ ANO_ATUAL = datetime.today().year
 # O portal aceita até 100 itens; reduzir de 30 para 100 diminui em ~70% as
 # requisições e também reduz a chance de encontrar uma resposta transitória.
 TAMANHO_PAGINA = 100
+# O Portal da Transparência pode retornar 202 durante vários minutos enquanto
+# prepara uma página. O backoff abaixo aguarda até cerca de nove minutos.
+TENTATIVAS_POR_PAGINA = 15
 BASE_URL = "https://portaldatransparencia.gov.br/emendas/consulta/resultado"
 
 COLUNAS = ",".join([
@@ -73,7 +77,7 @@ def carregar_deputados():
     }
 
 
-def buscar_pagina(offset):
+def buscar_pagina(offset, session):
     params = {
         "paginacaoSimples": "false",
         "tamanhoPagina": TAMANHO_PAGINA,
@@ -85,13 +89,15 @@ def buscar_pagina(offset):
         "colunasSelecionadas": COLUNAS,
     }
     # O portal responde 202 com HTML vazio enquanto prepara resultados sob
-    # carga. Fazemos polling por até cerca de dois minutos antes de desistir.
+    # carga. A sessão é compartilhada entre as páginas para preservar cookies
+    # que o portal possa usar para acompanhar esse processamento.
     payload = get_json(
         BASE_URL,
         params=params,
         headers=HEADERS,
-        tentativas=8,
+        tentativas=TENTATIVAS_POR_PAGINA,
         atraso_maximo=60,
+        session=session,
     )
     return payload.get("data", []), payload.get("recordsTotal", 0)
 
@@ -132,22 +138,23 @@ def main():
     deputados_index = carregar_deputados()
     print(f"{len(deputados_index)} deputados carregados.")
 
-    dados, total = buscar_pagina(offset=0)
+    with requests.Session() as session:
+        dados, total = buscar_pagina(offset=0, session=session)
 
-    if total == 0:
-        print("Nenhum registro encontrado.")
-        return
+        if total == 0:
+            print("Nenhum registro encontrado.")
+            return
 
-    total_paginas = math.ceil(total / TAMANHO_PAGINA)
-    print(f"{total} registros encontrados — {total_paginas} página(s) de {TAMANHO_PAGINA}")
+        total_paginas = math.ceil(total / TAMANHO_PAGINA)
+        print(f"{total} registros encontrados — {total_paginas} página(s) de {TAMANHO_PAGINA}")
 
-    emendas = [mapear_emenda(item, deputados_index) for item in dados]
+        emendas = [mapear_emenda(item, deputados_index) for item in dados]
 
-    for pagina in range(1, total_paginas):
-        offset = pagina * TAMANHO_PAGINA
-        print(f"Buscando página {pagina + 1}/{total_paginas} (offset {offset})...")
-        dados, _ = buscar_pagina(offset=offset)
-        emendas += [mapear_emenda(item, deputados_index) for item in dados]
+        for pagina in range(1, total_paginas):
+            offset = pagina * TAMANHO_PAGINA
+            print(f"Buscando página {pagina + 1}/{total_paginas} (offset {offset})...")
+            dados, _ = buscar_pagina(offset=offset, session=session)
+            emendas += [mapear_emenda(item, deputados_index) for item in dados]
 
     # Log de emendas sem match para facilitar diagnóstico
     sem_match = [e["nome_autor"] for e in emendas if e["deputado_id"] is None]

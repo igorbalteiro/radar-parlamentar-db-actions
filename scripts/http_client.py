@@ -24,7 +24,7 @@ def deve_tentar_novamente(erro):
 
 
 def get(url, *, params=None, headers=None, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-        tentativas=MAX_TENTATIVAS):
+        tentativas=MAX_TENTATIVAS, session=None):
     """Faz GET com timeout e backoff para falhas transitórias.
 
     Não faz retry para erros HTTP permanentes (por exemplo, 400 ou 404), para
@@ -33,7 +33,8 @@ def get(url, *, params=None, headers=None, timeout=(CONNECT_TIMEOUT, READ_TIMEOU
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
-            resposta = requests.get(url, params=params, headers=headers, timeout=timeout)
+            cliente = session or requests
+            resposta = cliente.get(url, params=params, headers=headers, timeout=timeout)
             if resposta.status_code in STATUS_RETRY:
                 raise requests.HTTPError(
                     f"HTTP {resposta.status_code} para {resposta.url}", response=resposta
