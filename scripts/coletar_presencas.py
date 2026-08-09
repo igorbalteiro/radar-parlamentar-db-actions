@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,8 +13,16 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 BASE_URL_CAMARA = "https://www.camara.leg.br/deputados"
-MAX_WORKERS = 8
+# O Portal da Câmara limita conexões simultâneas; concorrência alta resulta em
+# timeouts em cascata, mesmo quando a página funciona em acessos isolados.
+MAX_WORKERS = 2
 TAMANHO_LOTE = 100
+
+HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+    "User-Agent": "Mozilla/5.0 (compatible; RadarParlamentar/1.0)",
+}
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -36,7 +45,7 @@ def get_presencas_plenario(deputado_id):
     ausencias_nao_justificadas e total_sessoes.
     """
     url = f"{BASE_URL_CAMARA}/{deputado_id}/presenca-plenario/{ANO_ATUAL}"
-    r = get(url)
+    r = get(url, headers=HEADERS, timeout=(20, 60), tentativas=6)
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -59,6 +68,8 @@ def get_presencas_plenario(deputado_id):
     if None in (presencas, ausencias_justificadas, ausencias_nao_justificadas):
         raise ValueError(f"Resumo de presença não encontrado em {url}")
 
+    # Espaça acessos bem-sucedidos para não sobrecarregar o portal.
+    time.sleep(0.5)
     total_sessoes = presencas + ausencias_justificadas + ausencias_nao_justificadas
 
     return {
