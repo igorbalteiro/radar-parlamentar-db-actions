@@ -83,7 +83,15 @@ def processar_deputado(dep, status_anteriores):
 def main():
     print(f"Iniciando coleta: {DATA_HOJE}")
 
-    deputados = get_deputados()
+    deputados_brutos = get_deputados()
+    # A API pode repetir um deputado em páginas diferentes. O Postgres não
+    # aceita duas linhas da mesma requisição de upsert com a mesma chave.
+    deputados_por_id = {deputado["id"]: deputado for deputado in deputados_brutos}
+    deputados = list(deputados_por_id.values())
+    repetidos = len(deputados_brutos) - len(deputados)
+    if repetidos:
+        print(f"⚠️  {repetidos} registro(s) duplicado(s) da API foram ignorados.")
+
     status_anteriores = carregar_status_anteriores()
     print(f"{len(deputados)} deputados encontrados. Iniciando coleta paralela...\n")
 
