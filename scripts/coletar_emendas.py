@@ -7,10 +7,8 @@ import re
 import unicodedata
 import zipfile
 from datetime import datetime
-
 import requests
 from supabase import create_client
-
 from http_client import get
 
 

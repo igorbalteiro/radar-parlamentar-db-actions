@@ -29,6 +29,9 @@ def get_deputados():
         dados = get_json(
             f"{BASE_URL}/deputados",
             params={"idLegislatura": 57, "itens": 100, "pagina": pagina},
+            timeout=(20, 60),
+            tentativas=10,
+            atraso_maximo=60,
         )["dados"]
         deputados.extend(dados)
         if len(dados) < 100:
@@ -50,9 +53,26 @@ def carregar_status_anteriores():
     return {deputado["id"]: deputado.get("status") for deputado in res.data}
 
 
+def carregar_deputados_do_banco():
+    """Usa o último cadastro salvo se a API estiver indisponível por completo."""
+    res = supabase.table("deputados").select(
+        "id, nome, partido, uf, url_foto"
+    ).execute()
+    return [
+        {
+            "id": deputado["id"],
+            "nome": deputado["nome"],
+            "siglaPartido": deputado.get("partido"),
+            "siglaUf": deputado.get("uf"),
+            "urlFoto": deputado.get("url_foto"),
+        }
+        for deputado in res.data
+    ]
+
+
 # ─── Tarefa por deputado ────────────────────────────────────────────────────
 
-def processar_deputado(dep, status_anteriores):
+def processar_deputado(dep, status_anteriores, atualizar_timestamp=True):
     """
     Executada em paralelo para cada deputado.
     Coleta o status e monta o cadastro para persistência em lote.
@@ -67,15 +87,17 @@ def processar_deputado(dep, status_anteriores):
         status = status_anteriores.get(dep_id)
         aviso = f"status não atualizado: {erro}"
 
-    return {
+    registro = {
         "id": dep_id,
         "nome": nome,
         "partido": dep.get("siglaPartido"),
         "uf": dep.get("siglaUf"),
         "url_foto": dep.get("urlFoto"),
         "status": status,
-        "atualizado_em": hoje.isoformat(),
-    }, aviso
+    }
+    if atualizar_timestamp:
+        registro["atualizado_em"] = hoje.isoformat()
+    return registro, aviso
 
 
 # ─── Execução principal ─────────────────────────────────────────────────────
@@ -83,7 +105,16 @@ def processar_deputado(dep, status_anteriores):
 def main():
     print(f"Iniciando coleta: {DATA_HOJE}")
 
-    deputados_brutos = get_deputados()
+    try:
+        deputados_brutos = get_deputados()
+        usando_cadastro_anterior = False
+    except Exception as erro:
+        print(f"⚠️  API da Câmara indisponível; usando cadastro anterior: {erro}")
+        deputados_brutos = carregar_deputados_do_banco()
+        usando_cadastro_anterior = True
+        if not deputados_brutos:
+            raise RuntimeError("A API da Câmara falhou e não há deputados salvos no banco.") from erro
+
     # A API pode repetir um deputado em páginas diferentes. O Postgres não
     # aceita duas linhas da mesma requisição de upsert com a mesma chave.
     deputados_por_id = {deputado["id"]: deputado for deputado in deputados_brutos}
@@ -101,7 +132,12 @@ def main():
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(processar_deputado, dep, status_anteriores): dep["nome"]
+            executor.submit(
+                processar_deputado,
+                dep,
+                status_anteriores,
+                atualizar_timestamp=not usando_cadastro_anterior,
+            ): dep["nome"]
             for dep in deputados
         }
 
