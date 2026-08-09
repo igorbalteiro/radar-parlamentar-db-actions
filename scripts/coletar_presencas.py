@@ -31,28 +31,34 @@ def get_deputados_do_banco():
 
 def get_presencas_plenario(deputado_id):
     """
-    Faz scraping da página do deputado e extrai os dados de
-    Presença em Plenário para o ano corrente.
+    Extrai o resumo anual do relatório oficial de Presença em Plenário.
     Retorna dict com presencas, ausencias_justificadas,
     ausencias_nao_justificadas e total_sessoes.
     """
-    url = f"{BASE_URL_CAMARA}/{deputado_id}"
-    r = get(url, params={"ano": ANO_ATUAL})
+    url = f"{BASE_URL_CAMARA}/{deputado_id}/presenca-plenario/{ANO_ATUAL}"
+    r = get(url)
 
     soup = BeautifulSoup(r.text, "html.parser")
 
     def extrair_valor(label):
-        for li in soup.find_all("li"):
-            texto = li.get_text(separator=" ", strip=True)
-            if label in texto:
-                numeros = re.findall(r'\d+', texto)
-                if numeros:
-                    return int(numeros[0])
-        return 0
+        for linha in soup.find_all("tr"):
+            colunas = [coluna.get_text(" ", strip=True) for coluna in linha.find_all(["th", "td"])]
+            if colunas and label in colunas[0]:
+                numero = re.search(r"\d+", " ".join(colunas[1:]))
+                if numero:
+                    return int(numero.group())
+        return None
 
-    presencas = extrair_valor("Presenças na Câmara")
-    ausencias_justificadas = extrair_valor("Ausências justificadas")
-    ausencias_nao_justificadas = extrair_valor("Ausências não justificadas")
+    presencas = extrair_valor("Total de dias com presença nas sessões deliberativas")
+    ausencias_justificadas = extrair_valor(
+        "Total de dias com ausências justificadas em sessões deliberativas"
+    )
+    ausencias_nao_justificadas = extrair_valor(
+        "Total de dias com ausências não justificadas em sessões deliberativas"
+    )
+    if None in (presencas, ausencias_justificadas, ausencias_nao_justificadas):
+        raise ValueError(f"Resumo de presença não encontrado em {url}")
+
     total_sessoes = presencas + ausencias_justificadas + ausencias_nao_justificadas
 
     return {
