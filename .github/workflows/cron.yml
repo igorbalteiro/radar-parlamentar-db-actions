@@ -2,7 +2,7 @@ name: Coletar Dados Câmara
 
 on:
   schedule:
-    - cron: '0 6 * * *'      # Diariamente às 06h UTC (metricas + emendas)
+    - cron: '0 6 * * *'      # Diariamente às 06h UTC (despesas + métricas + emendas)
     - cron: '0 8 * * 6'      # Sábados às 08h UTC (deputados + presenças)
   workflow_dispatch:
     inputs:
@@ -14,21 +14,51 @@ on:
         options:
           - todos
           - deputados
+          - despesas
           - metricas
           - emendas
           - presencas
 
 jobs:
-  coletar_metricas:
-    name: Coleta diária (métricas)
+  coletar_despesas:
+    name: Coleta diária (despesas)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && (
         github.event.inputs.script_selecionado == 'todos' ||
-        github.event.inputs.script_selecionado == 'metricas'
+        github.event.inputs.script_selecionado == 'despesas'
       ))
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar coleta (Despesas)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/coletar_despesas.py
+
+  coletar_metricas:
+    name: Coleta diária (métricas)
+    runs-on: ubuntu-latest
+    needs: coletar_despesas
+    timeout-minutes: 60
+    if: |
+      always() && (
+        (github.event_name == 'schedule' && needs.coletar_despesas.result == 'success' && github.event.schedule == '0 6 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (
+        github.event.inputs.script_selecionado == 'todos' ||
+        github.event.inputs.script_selecionado == 'metricas'
+      )))
 
     steps:
       - uses: actions/checkout@v4

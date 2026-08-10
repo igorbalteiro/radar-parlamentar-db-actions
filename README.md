@@ -15,6 +15,7 @@ Coleta diariamente dados públicos sobre os deputados federais brasileiros e os 
 ```
 ├── scripts/
 │   ├── coletar_deputados.py     # Cadastro e status dos deputados
+│   ├── coletar_despesas.py      # Despesas da cota parlamentar
 │   ├── coletar_metricas.py      # Gastos, discursos e proposições
 │   ├── coletar_emendas.py       # Emendas parlamentares
 │   ├── coletar_presencas.py     # Presenças em plenário
@@ -40,6 +41,11 @@ Busca todos os deputados ativos da legislatura 57 via API da Câmara dos Deputad
 Coleta as métricas dos deputados nos últimos 30 dias: total de gastos com a cota parlamentar, quantidade de discursos e quantidade de proposições apresentadas. Os dados são processados em paralelo usando `ThreadPoolExecutor` para otimizar o tempo de execução.
 
 **Fonte:** [dadosabertos.camara.leg.br](https://dadosabertos.camara.leg.br/api/v2)
+
+### `coletar_despesas.py`
+Baixa o ZIP de despesas da cota parlamentar do ano corrente publicado pela Câmara, associa cada registro ao deputado pelo campo `ideCadastro` e sincroniza a tabela `despesas_deputados`. Registros de lideranças e órgãos sem `ideCadastro` são ignorados.
+
+**Fonte:** [camara.leg.br/cotas](https://www.camara.leg.br/cotas/)
 
 ---
 
@@ -70,7 +76,7 @@ Os scripts são executados automaticamente via GitHub Actions com a seguinte fre
 
 | Frequência | Horário | Scripts |
 |---|---|---|
-| Diária | 06h00 UTC | `coletar_metricas.py`, `notificar.py` |
+| Diária | 06h00 UTC | `coletar_despesas.py`, `coletar_metricas.py`, `notificar.py` |
 | Semanal (sábado) | 08h00 UTC | `coletar_deputados.py`, `coletar_presencas.py` |
 | Semanal (sábado) | 08h00 UTC | `coletar_emendas.py` |
 
@@ -97,6 +103,7 @@ export SUPABASE_URL=https://xxxx.supabase.co
 export SUPABASE_KEY=sua_service_role_key
 
 python scripts/coletar_deputados.py
+python scripts/coletar_despesas.py
 python scripts/coletar_metricas.py
 python scripts/coletar_emendas.py
 python scripts/coletar_presencas.py
@@ -127,6 +134,7 @@ Os scripts alimentam as seguintes tabelas no Supabase:
 | Tabela | Descrição |
 |---|---|
 | `deputados` | Cadastro dos deputados federais |
+| `despesas_deputados` | Despesas da cota parlamentar por deputado |
 | `metricas_deputados` | Gastos, discursos e proposições por deputado por dia |
 | `emendas_parlamentares` | Emendas do ano corrente com valores financeiros |
 | `emendas_detalhes` | Documentos relacionados a cada emenda |
