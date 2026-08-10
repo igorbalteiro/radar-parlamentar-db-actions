@@ -10,8 +10,11 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 12
+# Consultas simultâneas demais tornam a API de dados abertos indisponível para
+# o runner do GitHub Actions.
+MAX_WORKERS = 2
 TAMANHO_LOTE = 100
+TENTATIVAS_LISTAGEM = 3
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -30,8 +33,8 @@ def get_deputados():
             f"{BASE_URL}/deputados",
             params={"idLegislatura": 57, "itens": 100, "pagina": pagina},
             timeout=(20, 60),
-            tentativas=10,
-            atraso_maximo=60,
+            tentativas=TENTATIVAS_LISTAGEM,
+            atraso_maximo=8,
         )["dados"]
         deputados.extend(dados)
         if len(dados) < 100:
@@ -72,7 +75,12 @@ def carregar_deputados_do_banco():
 
 # ─── Tarefa por deputado ────────────────────────────────────────────────────
 
-def processar_deputado(dep, status_anteriores, atualizar_timestamp=True):
+def processar_deputado(
+    dep,
+    status_anteriores,
+    atualizar_timestamp=True,
+    consultar_status=True,
+):
     """
     Executada em paralelo para cada deputado.
     Coleta o status e monta o cadastro para persistência em lote.
@@ -80,12 +88,16 @@ def processar_deputado(dep, status_anteriores, atualizar_timestamp=True):
     dep_id = dep["id"]
     nome = dep["nome"]
 
-    try:
-        status = get_status_deputado(dep_id)
-        aviso = None
-    except Exception as erro:
+    if not consultar_status:
         status = status_anteriores.get(dep_id)
-        aviso = f"status não atualizado: {erro}"
+        aviso = None
+    else:
+        try:
+            status = get_status_deputado(dep_id)
+            aviso = None
+        except Exception as erro:
+            status = status_anteriores.get(dep_id)
+            aviso = f"status não atualizado: {erro}"
 
     registro = {
         "id": dep_id,
@@ -124,7 +136,13 @@ def main():
         print(f"⚠️  {repetidos} registro(s) duplicado(s) da API foram ignorados.")
 
     status_anteriores = carregar_status_anteriores()
-    print(f"{len(deputados)} deputados encontrados. Iniciando coleta paralela...\n")
+    if usando_cadastro_anterior:
+        print(
+            f"{len(deputados)} deputados encontrados no cadastro anterior. "
+            "Nenhuma consulta individual de status será feita.\n"
+        )
+    else:
+        print(f"{len(deputados)} deputados encontrados. Iniciando coleta controlada...\n")
 
     concluidos = 0
     avisos = []
@@ -137,6 +155,7 @@ def main():
                 dep,
                 status_anteriores,
                 atualizar_timestamp=not usando_cadastro_anterior,
+                consultar_status=not usando_cadastro_anterior,
             ): dep["nome"]
             for dep in deputados
         }

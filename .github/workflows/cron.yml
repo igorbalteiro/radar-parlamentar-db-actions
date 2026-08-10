@@ -160,7 +160,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/coletar_deputados.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u scripts/coletar_deputados.py
 
   coletar_presencas:
     name: Coleta semanal (presenças)
