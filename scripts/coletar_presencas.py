@@ -1,10 +1,11 @@
 import os
+import random
 import time
 from datetime import datetime
 from supabase import create_client
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 import re
+import requests
 from http_client import get
 
 # ─── Configuração ───────────────────────────────────────────────────────────
@@ -13,10 +14,13 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 BASE_URL_CAMARA = "https://www.camara.leg.br/deputados"
-# O Portal da Câmara limita conexões simultâneas; concorrência alta resulta em
-# timeouts em cascata, mesmo quando a página funciona em acessos isolados.
-MAX_WORKERS = 2
+# O Portal da Câmara passa a recusar conexões quando recebe muitas consultas
+# seguidas do mesmo IP. A coleta é intencionalmente sequencial e espaçada.
 TAMANHO_LOTE = 100
+INTERVALO_MINIMO = 2.0
+INTERVALO_MAXIMO = 3.0
+PAUSA_APOS_TIMEOUT = 45
+TENTATIVAS_POR_PAGINA = 3
 
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -25,6 +29,7 @@ HEADERS = {
 }
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+session = requests.Session()
 
 hoje = datetime.today()
 ANO_ATUAL = hoje.year
@@ -45,7 +50,20 @@ def get_presencas_plenario(deputado_id):
     ausencias_nao_justificadas e total_sessoes.
     """
     url = f"{BASE_URL_CAMARA}/{deputado_id}/presenca-plenario/{ANO_ATUAL}"
-    r = get(url, headers=HEADERS, timeout=(20, 60), tentativas=6)
+    try:
+        r = get(
+            url,
+            headers=HEADERS,
+            timeout=(10, 60),
+            tentativas=TENTATIVAS_POR_PAGINA,
+            session=session,
+        )
+    except requests.ConnectTimeout:
+        # Evita que o próximo deputado recomece imediatamente uma sequência de
+        # conexões recusadas/silenciosamente descartadas pela Câmara.
+        print(f"  timeout de conexão; aguardando {PAUSA_APOS_TIMEOUT}s antes do próximo deputado")
+        time.sleep(PAUSA_APOS_TIMEOUT)
+        raise
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -69,7 +87,7 @@ def get_presencas_plenario(deputado_id):
         raise ValueError(f"Resumo de presença não encontrado em {url}")
 
     # Espaça acessos bem-sucedidos para não sobrecarregar o portal.
-    time.sleep(0.5)
+    time.sleep(random.uniform(INTERVALO_MINIMO, INTERVALO_MAXIMO))
     total_sessoes = presencas + ausencias_justificadas + ausencias_nao_justificadas
 
     return {
@@ -84,7 +102,7 @@ def get_presencas_plenario(deputado_id):
 
 def processar_deputado(dep):
     """
-    Executada em paralelo para cada deputado.
+    Coleta os dados de um deputado.
     Coleta presenças e monta os registros para persistência em lote.
     """
     dep_id = dep["id"]
@@ -111,33 +129,28 @@ def processar_deputado(dep):
 # ─── Execução principal ─────────────────────────────────────────────────────
 
 def main():
-    print(f"Iniciando coleta de presenças — {ANO_ATUAL}")
+    print(f"Iniciando coleta de presenças — {ANO_ATUAL}", flush=True)
 
     deputados = get_deputados_do_banco()
-    print(f"{len(deputados)} deputados encontrados no banco. Iniciando coleta paralela...\n")
+    print(f"{len(deputados)} deputados encontrados no banco. Iniciando coleta sequencial...\n", flush=True)
 
     concluidos = 0
     erros = []
     registros_presencas = []
     registros_metricas = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(processar_deputado, dep): dep["nome"]
-            for dep in deputados
-        }
-
-        for future in as_completed(futures):
-            nome = futures[future]
-            try:
-                registros = future.result()
-                registros_presencas.append(registros["presenca"])
-                registros_metricas.append(registros["metrica"])
-                concluidos += 1
-                print(f"[{concluidos}/{len(deputados)}] {nome}")
-            except Exception as e:
-                erros.append(nome)
-                print(f"[ERRO] {nome}: {e}")
+    for indice, dep in enumerate(deputados, start=1):
+        nome = dep["nome"]
+        print(f"[{indice}/{len(deputados)}] Consultando {nome}...", flush=True)
+        try:
+            registros = processar_deputado(dep)
+            registros_presencas.append(registros["presenca"])
+            registros_metricas.append(registros["metrica"])
+            concluidos += 1
+            print(f"[{indice}/{len(deputados)}] ✓ {nome}", flush=True)
+        except Exception as e:
+            erros.append(nome)
+            print(f"[ERRO] {nome}: {e}", flush=True)
 
     for inicio in range(0, len(registros_presencas), TAMANHO_LOTE):
         supabase.table("presencas_deputados").upsert(
@@ -149,11 +162,12 @@ def main():
             on_conflict="deputado_id,data_referencia",
         ).execute()
 
-    print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.")
+    print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.", flush=True)
     if erros:
         print(
             f"⚠️  Falhas transitórias em {len(erros)} deputado(s); "
-            f"a coleta parcial foi salva: {', '.join(erros)}"
+            f"a coleta parcial foi salva: {', '.join(erros)}",
+            flush=True,
         )
 
 

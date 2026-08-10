@@ -187,4 +187,5 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/coletar_presencas.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u scripts/coletar_presencas.py
