@@ -39,7 +39,7 @@ Busca todos os deputados ativos da legislatura 57 via API da Câmara dos Deputad
 ---
 
 ### `coletar_metricas.py`
-Coleta as métricas dos deputados nos últimos 30 dias: total de gastos com a cota parlamentar, quantidade de discursos e quantidade de proposições apresentadas. Os dados são processados em paralelo usando `ThreadPoolExecutor` para otimizar o tempo de execução.
+Coleta as métricas dos deputados nos últimos 30 dias: total de gastos com a cota parlamentar, quantidade de discursos e quantidade de proposições apresentadas. Os gastos são agregados da tabela `despesas_deputados`, já sincronizada pelo job anterior, e discursos e proposições são consultados em paralelo na API da Câmara com conexões HTTP reutilizadas.
 
 **Fonte:** [dadosabertos.camara.leg.br](https://dadosabertos.camara.leg.br/api/v2)
 

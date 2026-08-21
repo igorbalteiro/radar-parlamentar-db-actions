@@ -1,7 +1,10 @@
 import os
-from datetime import date, datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import local
+import requests
 from http_client import get_json
 
 # ─── Configuração ───────────────────────────────────────────────────────────
@@ -9,14 +12,19 @@ from http_client import get_json
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
-MAX_WORKERS = 8
+MAX_WORKERS = 4
 TAMANHO_LOTE = 100
+ITENS_POR_PAGINA = 100
+TAMANHO_PAGINA_SUPABASE = 1000
+TIMEOUT_API = (10, 20)
+TENTATIVAS_API = 2
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 hoje = datetime.today()
 DATA_FIM = hoje.strftime("%Y-%m-%d")
 DATA_INICIO = (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
+_thread_local = local()
 
 
 # ─── Funções de coleta ──────────────────────────────────────────────────────
@@ -27,52 +35,41 @@ def get_deputados_do_banco():
     return res.data
 
 
-def get_id_legislatura(data_referencia):
-    """Retorna a legislatura da Câmara correspondente à data informada."""
-    if isinstance(data_referencia, datetime):
-        data_referencia = data_referencia.date()
-
-    ano_inicio = data_referencia.year
-    if (data_referencia.month, data_referencia.day) < (2, 1):
-        ano_inicio -= 1
-    ano_inicio -= (ano_inicio - 2023) % 4
-
-    return 57 + (ano_inicio - 2023) // 4
+def get_session():
+    """Retorna uma sessão HTTP exclusiva para a thread atual."""
+    if not hasattr(_thread_local, "session"):
+        _thread_local.session = requests.Session()
+    return _thread_local.session
 
 
-def get_gastos(deputado_id):
+def get_gastos_por_deputado():
     """
-    Soma todos os gastos do deputado nos últimos 30 dias.
-    A API de despesas filtra por ano e mês, não por data exata.
+    Agrega gastos dos últimos 30 dias a partir da tabela já sincronizada.
+
+    O job de despesas é executado antes deste. Consultar essa tabela evita uma
+    requisição paginada à API da Câmara para cada deputado e para cada mês.
     """
-    total = 0.0
+    totais = defaultdict(float)
+    inicio = 0
 
-    meses = set()
-    for i in range(31):
-        dia = hoje - timedelta(days=i)
-        meses.add((dia.year, dia.month))
-
-    for ano, mes in meses:
-        id_legislatura = get_id_legislatura(date(ano, mes, 1))
-        pagina = 1
-        while True:
-            payload = get_json(
-                f"{BASE_URL}/deputados/{deputado_id}/despesas",
-                params={
-                    "idLegislatura": id_legislatura,
-                    "ano": ano,
-                    "mes": mes,
-                    "itens": 100,
-                    "pagina": pagina,
-                },
+    while True:
+        resposta = (
+            supabase.table("despesas_deputados")
+            .select("deputado_id, valor_documento")
+            .gte("data_documento", DATA_INICIO)
+            .lte("data_documento", DATA_FIM)
+            .range(inicio, inicio + TAMANHO_PAGINA_SUPABASE - 1)
+            .execute()
+        )
+        despesas = resposta.data
+        for despesa in despesas:
+            totais[despesa["deputado_id"]] += float(
+                despesa.get("valor_documento") or 0
             )
-            dados = payload.get("dados", [])
-            if not dados:
-                break
-            total += sum(d.get("valorDocumento", 0) for d in dados)
-            pagina += 1
 
-    return total
+        if len(despesas) < TAMANHO_PAGINA_SUPABASE:
+            return totais
+        inicio += TAMANHO_PAGINA_SUPABASE
 
 
 def get_discursos(deputado_id):
@@ -85,14 +82,18 @@ def get_discursos(deputado_id):
             params={
                 "dataInicio": DATA_INICIO,
                 "dataFim": DATA_FIM,
-                "itens": 100,
+                "itens": ITENS_POR_PAGINA,
                 "pagina": pagina,
             },
+            session=get_session(),
+            timeout=TIMEOUT_API,
+            tentativas=TENTATIVAS_API,
+            atraso_maximo=2,
         )
         dados = payload.get("dados", [])
-        if not dados:
-            break
         total += len(dados)
+        if len(dados) < ITENS_POR_PAGINA:
+            break
         pagina += 1
     return total
 
@@ -108,21 +109,25 @@ def get_proposicoes(deputado_id):
                 "idDeputadoAutor": deputado_id,
                 "dataApresentacaoInicio": DATA_INICIO,
                 "dataApresentacaoFim": DATA_FIM,
-                "itens": 100,
+                "itens": ITENS_POR_PAGINA,
                 "pagina": pagina,
             },
+            session=get_session(),
+            timeout=TIMEOUT_API,
+            tentativas=TENTATIVAS_API,
+            atraso_maximo=2,
         )
         dados = payload.get("dados", [])
-        if not dados:
-            break
         total += len(dados)
+        if len(dados) < ITENS_POR_PAGINA:
+            break
         pagina += 1
     return total
 
 
 # ─── Tarefa por deputado ────────────────────────────────────────────────────
 
-def processar_deputado(dep):
+def processar_deputado(dep, gastos_por_deputado):
     """
     Executada em paralelo para cada deputado.
     Coleta métricas e persiste na tabela metricas_deputados.
@@ -131,7 +136,7 @@ def processar_deputado(dep):
     dep_id = dep["id"]
     nome = dep["nome"]
 
-    gastos = get_gastos(dep_id)
+    gastos = gastos_por_deputado.get(dep_id, 0.0)
     discursos = get_discursos(dep_id)
     proposicoes = get_proposicoes(dep_id)
 
@@ -150,6 +155,7 @@ def main():
     print(f"Iniciando coleta: {DATA_INICIO} → {DATA_FIM}")
 
     deputados = get_deputados_do_banco()
+    gastos_por_deputado = get_gastos_por_deputado()
     print(f"{len(deputados)} deputados encontrados no banco. Iniciando coleta paralela...\n")
 
     concluidos = 0
@@ -158,7 +164,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(processar_deputado, dep): dep["nome"]
+            executor.submit(processar_deputado, dep, gastos_por_deputado): dep["nome"]
             for dep in deputados
         }
 
