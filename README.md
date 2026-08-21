@@ -16,6 +16,7 @@ Coleta diariamente dados públicos sobre os deputados federais brasileiros e os 
 ├── scripts/
 │   ├── coletar_deputados.py     # Cadastro e status dos deputados
 │   ├── coletar_despesas.py      # Despesas da cota parlamentar
+│   ├── importar_despesas_historicas.py # Importação local de despesas antigas
 │   ├── coletar_metricas.py      # Gastos, discursos e proposições
 │   ├── coletar_emendas.py       # Emendas parlamentares
 │   ├── coletar_presencas.py     # Presenças em plenário
@@ -46,6 +47,9 @@ Coleta as métricas dos deputados nos últimos 30 dias: total de gastos com a co
 Baixa o ZIP de despesas da cota parlamentar do ano corrente publicado pela Câmara, associa cada registro ao deputado pelo campo `ideCadastro` e sincroniza a tabela `despesas_deputados`. Registros de lideranças e órgãos sem `ideCadastro` são ignorados.
 
 **Fonte:** [camara.leg.br/cotas](https://www.camara.leg.br/cotas/)
+
+### `importar_despesas_historicas.py`
+Importa localmente um ou mais arquivos CSV ou ZIP de despesas históricas. Os anos são identificados pela coluna `numAno` e são substituídos integralmente no banco antes da importação, evitando duplicatas em reexecuções.
 
 ---
 
@@ -104,6 +108,7 @@ export SUPABASE_KEY=sua_service_role_key
 
 python scripts/coletar_deputados.py
 python scripts/coletar_despesas.py
+python scripts/importar_despesas_historicas.py /caminho/Ano-2023.csv.zip /caminho/Ano-2024.csv.zip
 python scripts/coletar_metricas.py
 python scripts/coletar_emendas.py
 python scripts/coletar_presencas.py

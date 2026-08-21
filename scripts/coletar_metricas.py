@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from supabase import create_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http_client import get_json
@@ -27,6 +27,19 @@ def get_deputados_do_banco():
     return res.data
 
 
+def get_id_legislatura(data_referencia):
+    """Retorna a legislatura da Câmara correspondente à data informada."""
+    if isinstance(data_referencia, datetime):
+        data_referencia = data_referencia.date()
+
+    ano_inicio = data_referencia.year
+    if (data_referencia.month, data_referencia.day) < (2, 1):
+        ano_inicio -= 1
+    ano_inicio -= (ano_inicio - 2023) % 4
+
+    return 57 + (ano_inicio - 2023) // 4
+
+
 def get_gastos(deputado_id):
     """
     Soma todos os gastos do deputado nos últimos 30 dias.
@@ -40,11 +53,13 @@ def get_gastos(deputado_id):
         meses.add((dia.year, dia.month))
 
     for ano, mes in meses:
+        id_legislatura = get_id_legislatura(date(ano, mes, 1))
         pagina = 1
         while True:
             payload = get_json(
                 f"{BASE_URL}/deputados/{deputado_id}/despesas",
                 params={
+                    "idLegislatura": id_legislatura,
                     "ano": ano,
                     "mes": mes,
                     "itens": 100,
