@@ -1,172 +1,225 @@
-import os
-import random
-import time
-from datetime import datetime
-from supabase import create_client
-from bs4 import BeautifulSoup
-import re
-import requests
-from http_client import get
+"""Coleta presenças anuais por dia pelo webservice de sessões da Câmara."""
 
-# ─── Configuração ───────────────────────────────────────────────────────────
+import os
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta
+from threading import local
+from xml.etree import ElementTree
+
+import requests
+from supabase import create_client
+
+from http_client import get
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
-BASE_URL_CAMARA = "https://www.camara.leg.br/deputados"
-# O Portal da Câmara passa a recusar conexões quando recebe muitas consultas
-# seguidas do mesmo IP. A coleta é intencionalmente sequencial e espaçada.
+URL_DEPUTADOS = "https://www.camara.leg.br/SitCamaraWS/deputados.asmx/ObterDeputados"
+URL_PRESENCAS_DIA = (
+    "https://www.camara.leg.br/SitCamaraWS/sessoesreunioes.asmx/"
+    "ListarPresencasDia"
+)
 TAMANHO_LOTE = 100
-INTERVALO_MINIMO = 2.0
-INTERVALO_MAXIMO = 3.0
-PAUSA_APOS_TIMEOUT = 45
-TENTATIVAS_POR_PAGINA = 3
+MAX_WORKERS = 3
+TIMEOUT_WEBSERVICE = (10, 30)
+TENTATIVAS_WEBSERVICE = 2
 
 HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "pt-BR,pt;q=0.9",
     "User-Agent": "Mozilla/5.0 (compatible; RadarParlamentar/1.0)",
 }
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-session = requests.Session()
+_thread_local = local()
 
 hoje = datetime.today()
 ANO_ATUAL = hoje.year
 
 
-# ─── Funções de coleta ──────────────────────────────────────────────────────
+def get_session():
+    """Retorna uma sessão HTTP exclusiva para a thread atual."""
+    if not hasattr(_thread_local, "session"):
+        _thread_local.session = requests.Session()
+    return _thread_local.session
+
 
 def get_deputados_do_banco():
-    """Retorna lista de deputados já cadastrados na tabela deputados do Supabase."""
+    """Retorna deputados cadastrados usando o ideCadastro como identificador."""
     res = supabase.table("deputados").select("id, nome").execute()
     return res.data
 
 
-def get_presencas_plenario(deputado_id):
-    """
-    Extrai o resumo anual do relatório oficial de Presença em Plenário.
-    Retorna dict com presencas, ausencias_justificadas,
-    ausencias_nao_justificadas e total_sessoes.
-    """
-    url = f"{BASE_URL_CAMARA}/{deputado_id}/presenca-plenario/{ANO_ATUAL}"
-    try:
-        r = get(
-            url,
-            headers=HEADERS,
-            timeout=(10, 60),
-            tentativas=TENTATIVAS_POR_PAGINA,
-            session=session,
-        )
-    except requests.ConnectTimeout:
-        # Evita que o próximo deputado recomece imediatamente uma sequência de
-        # conexões recusadas/silenciosamente descartadas pela Câmara.
-        print(f"  timeout de conexão; aguardando {PAUSA_APOS_TIMEOUT}s antes do próximo deputado")
-        time.sleep(PAUSA_APOS_TIMEOUT)
-        raise
+def get_id_legislatura(data_referencia):
+    """Calcula a legislatura correspondente à data da sessão."""
+    ano_inicio = data_referencia.year
+    if (data_referencia.month, data_referencia.day) < (2, 1):
+        ano_inicio -= 1
+    ano_inicio -= (ano_inicio - 2023) % 4
+    return 57 + (ano_inicio - 2023) // 4
 
-    soup = BeautifulSoup(r.text, "html.parser")
 
-    def extrair_valor(label):
-        for linha in soup.find_all("tr"):
-            colunas = [coluna.get_text(" ", strip=True) for coluna in linha.find_all(["th", "td"])]
-            if colunas and label in colunas[0]:
-                numero = re.search(r"\d+", " ".join(colunas[1:]))
-                if numero:
-                    return int(numero.group())
-        return None
-
-    presencas = extrair_valor("Total de dias com presença nas sessões deliberativas")
-    ausencias_justificadas = extrair_valor(
-        "Total de dias com ausências justificadas em sessões deliberativas"
+def get_ids_por_carteira():
+    """Mapeia carteiraParlamentar (matrícula) para ideCadastro."""
+    resposta = get(
+        URL_DEPUTADOS,
+        headers=HEADERS,
+        timeout=TIMEOUT_WEBSERVICE,
+        tentativas=TENTATIVAS_WEBSERVICE,
+        session=get_session(),
     )
-    ausencias_nao_justificadas = extrair_valor(
-        "Total de dias com ausências não justificadas em sessões deliberativas"
+    raiz = ElementTree.fromstring(resposta.content)
+    ids_por_carteira = {}
+
+    for deputado in raiz.findall("deputado"):
+        ide_cadastro = deputado.findtext("ideCadastro")
+        matricula = deputado.findtext("matricula")
+        if ide_cadastro and matricula:
+            ids_por_carteira[int(matricula)] = int(ide_cadastro)
+
+    if not ids_por_carteira:
+        raise RuntimeError("O webservice da Câmara não retornou matrículas de deputados.")
+    return ids_por_carteira
+
+
+def get_presencas_do_dia(data_sessao, ids_por_carteira):
+    """Retorna frequências diárias associadas ao ideCadastro do deputado."""
+    resposta = get(
+        URL_PRESENCAS_DIA,
+        params={
+            "data": data_sessao.strftime("%d/%m/%Y"),
+            "numLegislatura": get_id_legislatura(data_sessao),
+            "numMatriculaParlamentar": "",
+            "siglaPartido": "",
+            "siglaUF": "",
+        },
+        headers=HEADERS,
+        timeout=TIMEOUT_WEBSERVICE,
+        tentativas=TENTATIVAS_WEBSERVICE,
+        session=get_session(),
     )
-    if None in (presencas, ausencias_justificadas, ausencias_nao_justificadas):
-        raise ValueError(f"Resumo de presença não encontrado em {url}")
+    raiz = ElementTree.fromstring(resposta.content)
+    totais = defaultdict(lambda: [0, 0, 0])
 
-    # Espaça acessos bem-sucedidos para não sobrecarregar o portal.
-    time.sleep(random.uniform(INTERVALO_MINIMO, INTERVALO_MAXIMO))
-    total_sessoes = presencas + ausencias_justificadas + ausencias_nao_justificadas
+    for parlamentar in raiz.findall("./parlamentares/parlamentar"):
+        carteira = parlamentar.findtext("carteiraParlamentar")
+        deputado_id = ids_por_carteira.get(int(carteira)) if carteira else None
+        if deputado_id is None:
+            continue
 
-    return {
-        "presencas": presencas,
-        "ausencias_justificadas": ausencias_justificadas,
-        "ausencias_nao_justificadas": ausencias_nao_justificadas,
-        "total_sessoes": total_sessoes,
-    }
+        frequencia = (parlamentar.findtext("descricaoFrequenciaDia") or "").strip().casefold()
+        if frequencia == "presença":
+            totais[deputado_id][0] += 1
+        elif frequencia == "ausência justificada":
+            totais[deputado_id][1] += 1
+        elif frequencia == "ausência":
+            totais[deputado_id][2] += 1
+
+    return totais
 
 
-# ─── Tarefa por deputado ────────────────────────────────────────────────────
+def iterar_dias_do_ano():
+    """Gera todas as datas do ano até hoje, inclusive."""
+    data_sessao = date(ANO_ATUAL, 1, 1)
+    data_final = hoje.date()
+    while data_sessao <= data_final:
+        yield data_sessao
+        data_sessao += timedelta(days=1)
 
-def processar_deputado(dep):
-    """
-    Coleta os dados de um deputado.
-    Coleta presenças e monta os registros para persistência em lote.
-    """
-    dep_id = dep["id"]
-    presencas = get_presencas_plenario(dep_id)
 
-    return {
-        "presenca": {
-            "id_deputado": dep_id,
+def somar_totais(destino, origem):
+    """Soma os totais de presença de uma data ao acumulado anual."""
+    for deputado_id, valores in origem.items():
+        acumulado = destino[deputado_id]
+        for indice, valor in enumerate(valores):
+            acumulado[indice] += valor
+
+
+def montar_registros(deputados, totais):
+    """Monta registros anuais de presença e a métrica diária correspondente."""
+    data_referencia = hoje.strftime("%Y-%m-%d")
+    registros_presencas = []
+    registros_metricas = []
+
+    for deputado in deputados:
+        deputado_id = deputado["id"]
+        presencas, justificadas, nao_justificadas = totais[deputado_id]
+        total_sessoes = presencas + justificadas + nao_justificadas
+        registros_presencas.append({
+            "id_deputado": deputado_id,
             "ano": ANO_ATUAL,
-            "total_sessoes": presencas["total_sessoes"],
-            "sessoes_presentes": presencas["presencas"],
-            "faltas_justificadas": presencas["ausencias_justificadas"],
-            "faltas_nao_justificadas": presencas["ausencias_nao_justificadas"],
-        },
-        "metrica": {
-            "deputado_id": dep_id,
-            "data_referencia": hoje.strftime("%Y-%m-%d"),
-            "total_sessoes": presencas["total_sessoes"],
-            "sessoes_presentes": presencas["presencas"],
-        },
-    }
+            "total_sessoes": total_sessoes,
+            "sessoes_presentes": presencas,
+            "faltas_justificadas": justificadas,
+            "faltas_nao_justificadas": nao_justificadas,
+        })
+        registros_metricas.append({
+            "deputado_id": deputado_id,
+            "data_referencia": data_referencia,
+            "total_sessoes": total_sessoes,
+            "sessoes_presentes": presencas,
+        })
 
+    return registros_presencas, registros_metricas
 
-# ─── Execução principal ─────────────────────────────────────────────────────
 
 def main():
     print(f"Iniciando coleta de presenças — {ANO_ATUAL}", flush=True)
 
     deputados = get_deputados_do_banco()
-    print(f"{len(deputados)} deputados encontrados no banco. Iniciando coleta sequencial...\n", flush=True)
+    ids_do_banco = {deputado["id"] for deputado in deputados}
+    ids_por_carteira = {
+        carteira: deputado_id
+        for carteira, deputado_id in get_ids_por_carteira().items()
+        if deputado_id in ids_do_banco
+    }
+    if not ids_por_carteira:
+        raise RuntimeError("Nenhuma matrícula da Câmara corresponde aos deputados no Supabase.")
 
-    concluidos = 0
+    dias = list(iterar_dias_do_ano())
+    print(
+        f"{len(deputados)} deputados e {len(dias)} dias encontrados. "
+        "Iniciando coleta diária em paralelo...\n",
+        flush=True,
+    )
+
+    totais = defaultdict(lambda: [0, 0, 0])
     erros = []
-    registros_presencas = []
-    registros_metricas = []
+    concluidos = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(get_presencas_do_dia, dia, ids_por_carteira): dia
+            for dia in dias
+        }
+        for future in as_completed(futures):
+            dia = futures[future]
+            try:
+                somar_totais(totais, future.result())
+                concluidos += 1
+                print(f"[{concluidos}/{len(dias)}] {dia:%d/%m/%Y}", flush=True)
+            except Exception as erro:
+                erros.append(dia)
+                print(f"[ERRO] {dia:%d/%m/%Y}: {erro}", flush=True)
 
-    for indice, dep in enumerate(deputados, start=1):
-        nome = dep["nome"]
-        print(f"[{indice}/{len(deputados)}] Consultando {nome}...", flush=True)
-        try:
-            registros = processar_deputado(dep)
-            registros_presencas.append(registros["presenca"])
-            registros_metricas.append(registros["metrica"])
-            concluidos += 1
-            print(f"[{indice}/{len(deputados)}] ✓ {nome}", flush=True)
-        except Exception as e:
-            erros.append(nome)
-            print(f"[ERRO] {nome}: {e}", flush=True)
-
+    registros_presencas, registros_metricas = montar_registros(deputados, totais)
     for inicio in range(0, len(registros_presencas), TAMANHO_LOTE):
+        fim = inicio + TAMANHO_LOTE
         supabase.table("presencas_deputados").upsert(
-            registros_presencas[inicio:inicio + TAMANHO_LOTE],
+            registros_presencas[inicio:fim],
             on_conflict="id_deputado,ano",
         ).execute()
         supabase.table("metricas_deputados").upsert(
-            registros_metricas[inicio:inicio + TAMANHO_LOTE],
+            registros_metricas[inicio:fim],
             on_conflict="deputado_id,data_referencia",
         ).execute()
 
-    print(f"\n✅ Concluído: {concluidos} deputados processados e salvos em lotes.", flush=True)
+    print(f"\n✅ Concluído: {concluidos} dias processados e salvos em lotes.", flush=True)
     if erros:
+        datas_com_erro = ", ".join(dia.strftime("%d/%m/%Y") for dia in erros)
         print(
-            f"⚠️  Falhas transitórias em {len(erros)} deputado(s); "
-            f"a coleta parcial foi salva: {', '.join(erros)}",
+            f"⚠️  Falhas transitórias em {len(erros)} dia(s); "
+            f"a coleta parcial foi salva: {datas_com_erro}",
             flush=True,
         )
 
