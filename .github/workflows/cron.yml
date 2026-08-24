@@ -24,12 +24,9 @@ jobs:
     name: Coleta diária (despesas)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: |
-      (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
-      (github.event_name == 'workflow_dispatch' && (
-        github.event.inputs.script_selecionado == 'todos' ||
-        github.event.inputs.script_selecionado == 'despesas'
-      ))
+    # Temporariamente desativado: o servidor de arquivos da Câmara expira
+    # conexões originadas nos runners do GitHub Actions.
+    if: false
 
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +51,7 @@ jobs:
     timeout-minutes: 60
     if: |
       always() && (
-        (github.event_name == 'schedule' && needs.coletar_despesas.result == 'success' && github.event.schedule == '0 6 * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && (
         github.event.inputs.script_selecionado == 'todos' ||
         github.event.inputs.script_selecionado == 'metricas'
